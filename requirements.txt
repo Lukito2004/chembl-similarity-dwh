@@ -1,0 +1,10 @@
+apache-airflow-providers-amazon==9.2.0
+apache-airflow-providers-postgres==6.0.0
+psycopg2-binary==2.9.10
+boto3==1.36.3
+requests==2.32.3
+tenacity==9.0.0
+numpy==1.26.4
+pandas==2.1.4
+pyarrow==16.1.0
+rdkit==2024.9.6
