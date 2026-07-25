@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Airflow runtime, recreated by docker compose
+logs/
+plugins/
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# Secrets and machine-local config
+.env
+*.pem
+
+# Local data artefacts, everything durable lives in S3 or Postgres
+data/
+*.parquet
+
+# Editors
+.idea/
+.vscode/
+*.swp
