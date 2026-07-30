@@ -12,8 +12,10 @@ venv/
 .coverage
 htmlcov/
 
-# Airflow runtime, recreated by docker compose
-logs/
+# Airflow runtime. The logs directory itself is tracked so docker never has to
+# create it, which would leave it owned by root.
+logs/*
+!logs/.gitkeep
 plugins/
 airflow.db
 airflow-webserver.pid
