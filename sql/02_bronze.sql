@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS bronze.chembl_id_lookup (
     chembl_id text PRIMARY KEY,
     entity_type text,
+    entity_id bigint,
     last_active integer,
     resource_url text,
     status text,
