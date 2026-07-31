@@ -29,6 +29,7 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
     - ./logs:/opt/airflow/logs
+    - ./sql:/opt/airflow/sql:ro
   user: "${AIRFLOW_UID:-50000}:0"
 
 services:
