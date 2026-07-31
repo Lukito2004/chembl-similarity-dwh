@@ -2,10 +2,12 @@ import pytest
 
 from chembl_sim.settings import (
     MissingSettingError,
+    Settings,
     env_decimal,
     env_integer,
     env_required,
     env_text,
+    get_settings,
 )
 
 
@@ -50,3 +52,18 @@ def test_decimal_parses_a_value_and_falls_back(monkeypatch):
     assert env_decimal("CHEMBL_TEST", 1.5) == 1.5
     monkeypatch.setenv("CHEMBL_TEST", "6")
     assert env_decimal("CHEMBL_TEST", 1.5) == 6.0
+
+
+def test_warehouse_dsn_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("CHEMBL_DWH_DSN", "postgresql://u:p@h:5432/d")
+    assert Settings.from_env().dwh.dsn == "postgresql://u:p@h:5432/d"
+
+
+def test_missing_warehouse_dsn_is_reported(monkeypatch):
+    monkeypatch.delenv("CHEMBL_DWH_DSN")
+    with pytest.raises(MissingSettingError, match="CHEMBL_DWH_DSN"):
+        Settings.from_env()
+
+
+def test_get_settings_returns_a_cached_instance():
+    assert get_settings() is get_settings()
