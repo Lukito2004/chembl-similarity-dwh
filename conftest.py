@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
 from chembl_sim.settings import get_settings
+
+# Airflow reads these at import time; a throwaway home keeps DAG tests off the real database.
+os.environ.setdefault("AIRFLOW_HOME", tempfile.mkdtemp(prefix="airflow-test-"))
+os.environ.setdefault("AIRFLOW__CORE__UNIT_TEST_MODE", "True")
+os.environ.setdefault("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
 
 BASE_ENV = {
     "CHEMBL_DWH_DSN": "postgresql://test:test@localhost:5432/test",

@@ -1,6 +1,18 @@
 import pytest
+from psycopg2 import sql as pgsql
 
 from chembl_sim.storage import db
+
+
+def render_sql(composed):
+    """Render psycopg2 sql objects offline, since quote_ident needs a live connection."""
+    if isinstance(composed, pgsql.Composed):
+        return "".join(render_sql(part) for part in composed.seq)
+    if isinstance(composed, pgsql.Identifier):
+        return ".".join(f'"{s}"' for s in composed.strings)
+    if isinstance(composed, pgsql.SQL):
+        return composed.string
+    return str(composed)
 
 
 class FakeCursor:
@@ -47,6 +59,7 @@ def fake_connect(monkeypatch):
 
     monkeypatch.setattr(db.psycopg2, "connect", connect)
     return connection
+
 
 def write_sql_files(directory, names):
     for name in names:
@@ -120,3 +133,35 @@ def test_explicit_dsn_overrides_settings(tmp_path, fake_connect):
     write_sql_files(tmp_path, ["01_schemas.sql"])
     db.apply_sql_directory(tmp_path, dsn="postgresql://explicit@host:5432/db")
     assert fake_connect.dsn == "postgresql://explicit@host:5432/db"
+
+
+class RecordingCursor:
+    def __init__(self):
+        self.statement = None
+        self.rows = None
+
+    def execute(self, statement, params=None):
+        self.statement = statement
+
+
+def test_upsert_builds_an_on_conflict_statement(monkeypatch):
+    captured = {}
+
+    def fake_execute_values(cursor, statement, rows, page_size):
+        captured["statement"] = render_sql(statement)
+        captured["rows"] = rows
+
+    monkeypatch.setattr(db, "execute_values", fake_execute_values)
+    count = db.upsert_rows(
+        RecordingCursor(), "bronze", "widget", ("chembl_id", "name"), [("CHEMBL1", "x")]
+    )
+    assert count == 1
+    assert '"bronze"."widget"' in captured["statement"]
+    assert 'ON CONFLICT ("chembl_id") DO UPDATE' in captured["statement"]
+    assert '"name" = EXCLUDED."name"' in captured["statement"]
+    assert "loaded_at = now()" in captured["statement"]
+
+
+def test_upsert_of_no_rows_touches_nothing(monkeypatch):
+    monkeypatch.setattr(db, "execute_values", lambda *a, **k: pytest.fail("should not run"))
+    assert db.upsert_rows(RecordingCursor(), "bronze", "widget", ("chembl_id",), []) == 0

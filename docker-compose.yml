@@ -19,6 +19,16 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    CHEMBL_API_BASE_URL: ${CHEMBL_API_BASE_URL}
+    CHEMBL_API_PAGE_SIZE: ${CHEMBL_API_PAGE_SIZE}
+    CHEMBL_API_TIMEOUT_SECONDS: ${CHEMBL_API_TIMEOUT_SECONDS}
+    CHEMBL_API_MAX_RETRIES: ${CHEMBL_API_MAX_RETRIES}
+    CHEMBL_API_REQUESTS_PER_SECOND: ${CHEMBL_API_REQUESTS_PER_SECOND}
+    CHEMBL_API_MAX_WORKERS: ${CHEMBL_API_MAX_WORKERS}
+    CHEMBL_DUMP_BASE_URL: ${CHEMBL_DUMP_BASE_URL}
+    CHEMBL_DUMP_DIR: ${CHEMBL_DUMP_DIR}
+    CHEMBL_DUMP_CHUNK_SIZE: ${CHEMBL_DUMP_CHUNK_SIZE}
+    CHEMBL_DUMP_TIMEOUT_SECONDS: ${CHEMBL_DUMP_TIMEOUT_SECONDS}
     PYTHONPATH: /opt/airflow/src
     # The warehouse is reached two ways: our library uses the DSN, Airflow operators
     # use the connection. Both are assembled from the same five .env values.
@@ -30,6 +40,7 @@ x-airflow-common: &airflow-common
     - ./src:/opt/airflow/src
     - ./logs:/opt/airflow/logs
     - ./sql:/opt/airflow/sql:ro
+    - ./data:/opt/airflow/data
   user: "${AIRFLOW_UID:-50000}:0"
 
 services:
