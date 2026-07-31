@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from functools import lru_cache
 
 
 class MissingSettingError(RuntimeError):
@@ -29,3 +31,31 @@ def env_integer(name: str, default: int) -> int:
 def env_decimal(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     return float(raw) if raw else default
+
+
+@dataclass(frozen=True)
+class DwhSettings:
+    """Warehouse connection. Schema names are fixed in the DDL, not configurable."""
+
+    dsn: str
+
+    @classmethod
+    def from_env(cls) -> DwhSettings:
+        return cls(dsn=env_required("CHEMBL_DWH_DSN"))
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Everything the pipeline reads from the environment."""
+
+    dwh: DwhSettings
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(dwh=DwhSettings.from_env())
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Cached settings. Call get_settings.cache_clear() after changing the environment."""
+    return Settings.from_env()
