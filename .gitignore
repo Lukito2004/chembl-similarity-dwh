@@ -26,7 +26,8 @@ standalone_admin_password.txt
 *.pem
 
 # Local data artefacts, everything durable lives in S3 or Postgres
-data/
+data/*
+!data/.gitkeep
 *.parquet
 
 # Editors
