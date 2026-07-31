@@ -178,3 +178,29 @@ def test_every_bronze_table_is_covered():
         "compound_structures",
         "chembl_id_lookup",
     }
+
+
+class CountingCursor:
+    def __init__(self, complete_count):
+        self.complete_count = complete_count
+        self.params = None
+
+    def execute(self, statement, params=None):
+        self.params = params
+
+    def fetchone(self):
+        return (self.complete_count,)
+
+
+def test_release_counts_as_loaded_when_every_resource_is_complete():
+    assert dump.already_loaded(CountingCursor(2), "ChEMBL_37") is True
+
+
+def test_release_is_not_loaded_when_a_resource_is_missing():
+    assert dump.already_loaded(CountingCursor(1), "ChEMBL_37") is False
+
+
+def test_watermark_resources_match_the_api_resources():
+    from chembl_sim.chembl.records import RESOURCES
+
+    assert set(dump.WATERMARK_RESOURCES) == {resource.name for resource in RESOURCES}

@@ -114,7 +114,7 @@ def ingest_resource(
             if watermark and watermark.chembl_release != chembl_release:
                 log.info("Release is now %s, restarting %s", chembl_release, resource.name)
                 watermark = None
-            if watermark and watermark.is_complete:
+            if watermark and watermark.is_complete and not force:
                 log.info("%s already complete for %s", resource.name, chembl_release)
                 return 0
             start_offset = watermark.next_offset if watermark else 0

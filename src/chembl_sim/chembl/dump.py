@@ -24,6 +24,7 @@ from chembl_sim.storage.db import warehouse_connection
 log = get_logger(__name__)
 
 ARCHIVE_PATTERN = re.compile(r"^chembl_(\d+)_postgresql\.tar\.gz$")
+WATERMARK_RESOURCES = ("molecule", "chembl_id_lookup")
 STAGING_SCHEMA = "chembl_raw"
 
 
@@ -249,10 +250,20 @@ def restore_table(dump_file: Path, table: str, dsn: str) -> None:
         raise DumpError(f"pg_restore failed for {table}: {result.stderr.strip()[:500]}")
 
 
+def already_loaded(cursor, release: str) -> bool:
+    """True when every resource watermark reports this release as complete."""
+    cursor.execute(
+        "SELECT count(*) FROM meta.ingest_watermark WHERE chembl_release = %s AND is_complete",
+        (release,),
+    )
+    return cursor.fetchone()[0] >= len(WATERMARK_RESOURCES)
+
+
 def ingest_from_dump(
     dsn: str | None = None,
     settings: DumpSettings | None = None,
     session: requests.Session | None = None,
+    force: bool = False,
 ) -> DumpResult:
     """Download the release dump and load its four tables into bronze.
 
@@ -265,6 +276,11 @@ def ingest_from_dump(
 
     artifact = discover_artifact(session, settings)
     log.info("Release %s from %s", artifact.release, artifact.url)
+    if not force:
+        with warehouse_connection(dsn) as conn, conn.cursor() as cursor:
+            if already_loaded(cursor, artifact.release):
+                log.info("%s is already loaded, skipping the download", artifact.release)
+                return DumpResult(release=artifact.release, rows={})
 
     archive = download_archive(session, artifact, settings)
     verify_checksum(archive, artifact.sha256, settings.chunk_size)
@@ -296,7 +312,7 @@ def ingest_from_dump(
 
         with conn.cursor() as cursor:
             cursor.execute(f"DROP SCHEMA IF EXISTS {STAGING_SCHEMA} CASCADE")
-            for resource in ("molecule", "chembl_id_lookup"):
+            for resource in WATERMARK_RESOURCES:
                 write_watermark(
                     cursor,
                     Watermark(
