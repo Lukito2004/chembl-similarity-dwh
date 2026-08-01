@@ -27,5 +27,14 @@ CREATE TABLE IF NOT EXISTS silver.molecule (
     built_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Bronze keeps the API's text representation, so the cast into silver must never
+-- raise. Anything that is not a plain number becomes null.
+CREATE OR REPLACE FUNCTION silver.safe_numeric(value text) RETURNS numeric
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE
+        WHEN value ~ '^\s*-?\d+(\.\d+)?([eE][-+]?\d+)?\s*$' THEN value::numeric
+    END;
+$$;
+
 COMMENT ON COLUMN silver.molecule.cx_logp IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';
 COMMENT ON COLUMN silver.molecule.molecular_species IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';
