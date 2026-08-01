@@ -449,6 +449,43 @@ with `Received invalid reply` while a public resolver answers normally. The Airf
 services therefore pin `1.1.1.1` alongside `8.8.8.8` in `docker-compose.yml` so
 notifications do not depend on whichever resolver the host happens to run.
 
+## Tests and CI
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt \
+  --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt
+
+ruff check .
+ruff format --check .
+pytest --cov
+```
+
+190 tests, 92 percent statement coverage, with a floor of 88 configured in
+`pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
+client is driven with `requests_mock`, warehouse code runs against a recording cursor
+fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.
+
+Coverage sits where the branching is. Every module carrying real decisions is at 93
+percent or above: watermark resets on a release change, the skip when a release is already
+loaded, the force override, tie flagging at the top-N boundary, the total numeric cast.
+What is left uncovered is mostly thin wrappers over boto3 plus the orchestration inside
+`ingest_from_dump`, which a full pipeline run exercises end to end.
+
+Two checks run on every push, defined in `.github/workflows/ci.yml`.
+
+The first installs against the same Airflow constraint file the container uses, on the same
+Python 3.11, then runs ruff and pytest. Resolving identical versions to the image is the
+point: a test suite that passes against different dependencies than production is not
+evidence of much.
+
+The second renders `docker-compose.yml` using `.env.example` alone, which catches the
+example environment drifting behind the compose file. That check needs care, because
+`docker compose config` exits zero when a variable is undefined and only prints a warning.
+The job therefore greps its own stderr and fails on `variable is not set`. Without that,
+the step would pass while quietly substituting blank strings.
+
 ## Known data gaps
 
 **`cx_logp` and `molecular_species` are always `NULL`.** The dimension table is required to

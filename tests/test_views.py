@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from psycopg2 import sql
 
 from chembl_sim.transform import views
@@ -111,3 +112,18 @@ def test_every_view_targets_the_gold_schema():
         "13_view_similarity_rollup.sql",
     ):
         assert "CREATE OR REPLACE VIEW gold." in read_sql(name)
+
+
+def test_the_pivot_is_dropped_before_it_is_created(fake_warehouse):
+    connection = fake_warehouse(views, results=[[("CHEMBL1",), ("CHEMBL2",)]])
+    assert views.create_pivot_view() == ["CHEMBL1", "CHEMBL2"]
+    statements = connection.cursor_object.statements
+    drop = next(i for i, s in enumerate(statements) if "DROP VIEW" in s)
+    create = next(i for i, s in enumerate(statements) if "CREATE VIEW" in s)
+    assert drop < create
+
+
+def test_an_empty_fact_table_is_reported(fake_warehouse):
+    fake_warehouse(views, results=[[]])
+    with pytest.raises(RuntimeError, match="no source molecules"):
+        views.create_pivot_view()

@@ -39,3 +39,10 @@ def test_the_specified_dimension_columns_are_all_present():
 def test_statistics_are_refreshed():
     assert "ANALYZE gold.dim_molecule" in mart.LOAD_MART
     assert "ANALYZE gold.fact_molecule_similarity" in mart.LOAD_MART
+
+
+def test_the_load_reports_both_row_counts(fake_warehouse):
+    fake_warehouse(mart, results=[(1099,), (1000,)])
+    load = mart.load_mart()
+    assert load.dimension_rows == 1099
+    assert load.fact_rows == 1000
