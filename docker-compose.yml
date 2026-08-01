@@ -60,7 +60,9 @@ services:
     restart: unless-stopped
 
   postgres-dwh:
-    image: postgres:16-alpine
+    # Matches the pg_restore shipped in the Airflow image. A 17 client emits
+    # SET transaction_timeout, which a 16 server rejects during restore.
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${CHEMBL_DWH_USER}
       POSTGRES_PASSWORD: ${CHEMBL_DWH_PASSWORD}
