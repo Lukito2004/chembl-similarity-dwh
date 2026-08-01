@@ -12,14 +12,19 @@ import pyarrow.parquet as pq
 
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import S3Settings, get_settings
+from functools import lru_cache
 
 log = get_logger(__name__)
 
 FINGERPRINTS_FOLDER = "fingerprints"
 
 
+@lru_cache(maxsize=1)
 def s3_client():
-    """A client using the standard credential chain, which resolves the SSO profile."""
+    """A client using the standard credential chain, which resolves the SSO profile.
+
+    Cached because each new session re-reads and re-parses the SSO token from disk.
+    """
     return boto3.Session().client("s3")
 
 
