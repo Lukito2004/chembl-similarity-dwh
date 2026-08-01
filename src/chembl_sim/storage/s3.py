@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Sequence
+from functools import lru_cache
 
 import boto3
 import numpy as np
@@ -12,7 +13,6 @@ import pyarrow.parquet as pq
 
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import S3Settings, get_settings
-from functools import lru_cache
 
 log = get_logger(__name__)
 
