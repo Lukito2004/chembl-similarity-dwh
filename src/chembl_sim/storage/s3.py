@@ -6,6 +6,7 @@ import io
 from collections.abc import Sequence
 
 import boto3
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -90,3 +91,31 @@ def read_text(key: str, settings: S3Settings | None = None) -> str:
     settings = settings or get_settings().s3
     body = s3_client().get_object(Bucket=settings.bucket, Key=key)["Body"].read()
     return body.decode("utf-8", errors="replace")
+
+
+SIMILARITY_FOLDER = "similarity_scores"
+
+
+def similarity_prefix(settings: S3Settings | None = None) -> str:
+    settings = settings or get_settings().s3
+    return f"{settings.root_prefix}/{SIMILARITY_FOLDER}"
+
+
+def similarity_key(source_chembl_id: str, settings: S3Settings | None = None) -> str:
+    """One object per source molecule, named after it so a rerun overwrites in place."""
+    return f"{similarity_prefix(settings)}/{source_chembl_id}.parquet"
+
+
+def similarity_table(
+    source_chembl_id: str,
+    target_ids: pa.Array,
+    scores: np.ndarray,
+) -> pa.Table:
+    """Self-contained score table: the source is a column, not just the file name."""
+    return pa.table(
+        {
+            "source_chembl_id": pa.array([source_chembl_id] * len(scores), pa.string()),
+            "target_chembl_id": target_ids,
+            "tanimoto_score": pa.array(scores),
+        }
+    )
