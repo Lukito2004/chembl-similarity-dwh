@@ -218,6 +218,12 @@ def extract_dump(archive: Path, destination: Path) -> Path:
             if source is None:
                 raise DumpError(f"{member.name} is not a regular file")
             target = destination / Path(member.name).name
+            if target.exists() and target.stat().st_size == member.size:
+                log.info("%s is already extracted", target.name)
+                return target
+            source = tar.extractfile(member)
+            if source is None:
+                raise DumpError(f"{member.name} is not a regular file")
             with source, target.open("wb") as handle:
                 shutil.copyfileobj(source, handle)
             log.info("Extracted %s at %.2f GB", target.name, target.stat().st_size / 1e9)
