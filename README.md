@@ -418,6 +418,37 @@ heavy atoms or alogp recorded. Its rows therefore show a genuinely empty cell ra
 Using `coalesce` instead would have relabelled those as `TOTAL` and folded a molecule with
 unknown properties into the grand total.
 
+## Failure notifications
+
+Every task in all four DAGs carries an `on_failure_callback` that posts to a Microsoft
+Teams webhook. The final task of `similarity_mart` also posts on success, so a completed
+rebuild announces itself without every task adding noise.
+
+The webhook URL comes from `CHEMBL_TEAMS_WEBHOOK_URL`. Leaving it empty disables alerting
+completely: the callback logs a warning then returns. A clone of this repository has to run
+without a webhook, so a missing URL can never be an error.
+
+More importantly, **alerting never raises**. Network errors, timeouts and non-success
+status codes are all caught, logged then swallowed. A callback that threw would replace the
+real pipeline failure with a notification failure, which is precisely the information you
+lose at the worst moment. The callback returns a boolean instead, so the outcome is still
+visible in the task log.
+
+`chembl_sim/alerting.py` imports nothing from Airflow. A failure callback receives a plain
+dictionary, so the module reads it with `.get` and `getattr` rather than depending on the
+scheduler. That keeps it unit testable with a stand-in object.
+
+The payload carries two shapes at once: an adaptive card in `attachments` plus the same
+content as plain text in `text`. Power Automate flows differ in which field they read, so
+supplying both avoids guessing at someone else's flow definition. The cohort webhook
+consumes the card.
+
+One environment note. The Power Automate host resolves through a six hop CNAME chain that
+some local resolvers reject, `systemd-resolved` on this machine among them, which fails
+with `Received invalid reply` while a public resolver answers normally. The Airflow
+services therefore pin `1.1.1.1` alongside `8.8.8.8` in `docker-compose.yml` so
+notifications do not depend on whichever resolver the host happens to run.
+
 ## Known data gaps
 
 **`cx_logp` and `molecular_species` are always `NULL`.** The dimension table is required to
