@@ -59,6 +59,7 @@ class Settings:
     s3: S3Settings
     fingerprint: FingerprintSettings
     source: SourceSettings
+    similarity: SimilaritySettings
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -69,6 +70,7 @@ class Settings:
             s3=S3Settings.from_env(),
             fingerprint=FingerprintSettings.from_env(),
             source=SourceSettings.from_env(),
+            similarity=SimilaritySettings.from_env(),
         )
 
 
@@ -175,4 +177,19 @@ class SourceSettings:
         return cls(
             input_prefix=env_required("CHEMBL_INPUT_PREFIX").strip("/"),
             target_size=env_integer("CHEMBL_SOURCE_TARGET_SIZE", 100),
+        )
+
+
+@dataclass(frozen=True)
+class SimilaritySettings:
+    """Top-N size and the row block that bounds peak memory during scoring."""
+
+    top_n: int
+    block_size: int
+
+    @classmethod
+    def from_env(cls) -> SimilaritySettings:
+        return cls(
+            top_n=env_integer("CHEMBL_SIMILARITY_TOP_N", 10),
+            block_size=env_integer("CHEMBL_SIMILARITY_BLOCK_SIZE", 250_000),
         )

@@ -264,3 +264,42 @@ both columns and each path fills only what its source actually provides. Neither
 invents the other's value. For the same reason `helm_notation` is populated only by the API
 path, since in the ChEMBL schema it belongs to the `biotherapeutics` table rather than
 `molecule_dictionary`.
+
+## Similarity search
+
+Tanimoto similarity is computed directly on the packed bytes: the intersection is
+`popcount(a AND b)` and the union is `popcount(a) + popcount(b) - intersection`. Library
+popcounts are computed once per run and reused for every source.
+
+Airflow 2.10 pins numpy to 1.26, which predates `np.bitwise_count`, so a 256-entry lookup
+table supplies the popcount. The code uses the native operation when the numpy version
+offers one, so nothing needs changing if the pin moves.
+
+Scoring is blocked at 250,000 molecules so the intermediate `AND` never materialises for
+the whole library at once. Measured on the full set:
+
+| Measure | Value |
+| --- | --- |
+| Library size | 2,897,802 fingerprints, 742 MB packed |
+| Load from S3 | 192 s |
+| Library popcounts | 1.7 s, once per run |
+| Scoring, one source against all | **1.70 s** |
+| 100 source molecules | **2.8 min** |
+| Peak resident memory | 2.1 GB |
+
+Because loading the library costs two orders of magnitude more than scoring a single
+source, the whole search runs as one task rather than as mapped tasks — parallelising it
+would repay the 192 second load in every worker.
+
+Ties matter more than they might appear. Tanimoto over 2048-bit fingerprints yields
+rationals with small denominators, so identical scores are common rather than rare. The
+top-N selection therefore takes every molecule at or above the Nth score, orders by score
+descending then by identifier ascending so the result is deterministic, and sets
+`has_duplicates_of_last_largest_score` on the included rows holding the boundary score
+whenever more molecules share it than there is room for.
+
+Each source molecule's full score table is written to S3 as a self-contained parquet
+object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
+source column costs nothing — it dictionary-encodes to a single entry — so the file is the
+same size as a minimal one while remaining readable on its own. With zstd each is about
+15.5 MB, roughly 1.55 GB for all 100, against 27.4 MB each under snappy.
