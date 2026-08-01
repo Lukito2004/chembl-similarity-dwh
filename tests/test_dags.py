@@ -49,3 +49,11 @@ def test_the_fingerprint_dag_consumes_the_silver_dataset():
     fingerprint_dag = DagBag("dags", include_examples=False).dags["fingerprint_build"]
     triggers = list(fingerprint_dag.timetable.dataset_condition.objects)
     assert triggers == [SILVER_MOLECULE]
+
+
+def test_the_input_dag_runs_ddl_then_load_then_selection():
+    from airflow.models import DagBag
+
+    input_dag = DagBag("dags", include_examples=False).dags["input_compounds"]
+    assert input_dag.get_task("load_input_files").upstream_task_ids == {"apply_ddl"}
+    assert input_dag.get_task("select_source_molecules").upstream_task_ids == {"load_input_files"}
