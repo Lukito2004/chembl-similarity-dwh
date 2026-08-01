@@ -244,27 +244,6 @@ Paracetamol is a real name collision rather than a data error: ChEMBL records it
 `ACETAMINOPHEN`. Resolving it would need the `molecule_synonyms` table, which is outside
 the four tables this project is asked to ingest, so it is left as a documented rejection.
 
-## Known data gaps
-
-**`cx_logp` and `molecular_species` are always `NULL`.** Both columns are required in the
-dimension table, and neither exists in ChEMBL 37. This is not an API limitation: the
-official schema documentation for the release lists `COMPOUND_PROPERTIES` with 15 columns
-— `molregno` plus `mw_freebase`, `alogp`, `hba`, `hbd`, `psa`, `rtb`, `ro3_pass`,
-`num_ro5_violations`, `full_mwt`, `aromatic_rings`, `heavy_atoms`, `qed_weighted`,
-`full_molformula` and `np_likeness_score` — and neither field is among them. The columns
-are kept in `silver.molecule` and `gold.dim_molecule` so the schema matches the
-specification and a backfill from an older release has somewhere to land.
-
-**17 molecules have no fingerprint.** Their SMILES cannot be parsed by RDKit. They are
-counted and logged per shard rather than failing the run.
-
-**Two columns depend on the ingest path.** The API exposes `resource_url` on
-`chembl_id_lookup` but has no `entity_id`; the release dump is the reverse. Bronze holds
-both columns and each path fills only what its source actually provides. Neither path
-invents the other's value. For the same reason `helm_notation` is populated only by the API
-path, since in the ChEMBL schema it belongs to the `biotherapeutics` table rather than
-`molecule_dictionary`.
-
 ## Similarity search
 
 Tanimoto similarity is computed directly on the packed bytes: the intersection is
@@ -289,7 +268,7 @@ the whole library at once. Measured on the full set:
 
 Because loading the library costs two orders of magnitude more than scoring a single
 source, the whole search runs as one task rather than as mapped tasks — parallelising it
-would repay the 192 second load in every worker.
+would pay the 192 second load again in every worker.
 
 Ties matter more than they might appear. Tanimoto over 2048-bit fingerprints yields
 rationals with small denominators, so identical scores are common rather than rare. The
@@ -298,8 +277,33 @@ descending then by identifier ascending so the result is deterministic, and sets
 `has_duplicates_of_last_largest_score` on the included rows holding the boundary score
 whenever more molecules share it than there is room for.
 
+Across the 100 source molecules the search produces 1,000 top-10 rows, of which 40 carry
+`has_duplicates_of_last_largest_score`, spread over 24 sources. Boundary ties are the
+common case rather than an edge case, which is why the flag exists.
+
 Each source molecule's full score table is written to S3 as a self-contained parquet
 object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
 source column costs nothing — it dictionary-encodes to a single entry — so the file is the
 same size as a minimal one while remaining readable on its own. With zstd each is about
 15.5 MB, roughly 1.55 GB for all 100, against 27.4 MB each under snappy.
+
+## Known data gaps
+
+**`cx_logp` and `molecular_species` are always `NULL`.** Both columns are required in the
+dimension table, and neither exists in ChEMBL 37. This is not an API limitation: the
+official schema documentation for the release lists `COMPOUND_PROPERTIES` with 15 columns
+— `molregno` plus `mw_freebase`, `alogp`, `hba`, `hbd`, `psa`, `rtb`, `ro3_pass`,
+`num_ro5_violations`, `full_mwt`, `aromatic_rings`, `heavy_atoms`, `qed_weighted`,
+`full_molformula` and `np_likeness_score` — and neither field is among them. The columns
+are kept in `silver.molecule` and `gold.dim_molecule` so the schema matches the
+specification and a backfill from an older release has somewhere to land.
+
+**17 molecules have no fingerprint.** Their SMILES cannot be parsed by RDKit. They are
+counted and logged per shard rather than failing the run.
+
+**Two columns depend on the ingest path.** The API exposes `resource_url` on
+`chembl_id_lookup` but has no `entity_id`; the release dump is the reverse. Bronze holds
+both columns and each path fills only what its source actually provides. Neither path
+invents the other's value. For the same reason `helm_notation` is populated only by the API
+path, since in the ChEMBL schema it belongs to the `biotherapeutics` table rather than
+`molecule_dictionary`.
