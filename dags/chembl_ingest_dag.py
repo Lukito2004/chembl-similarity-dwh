@@ -12,6 +12,7 @@ from airflow.models.param import Param
 from airflow.operators.python import get_current_context
 from airflow.utils.trigger_rule import TriggerRule
 
+from chembl_datasets import SILVER_MOLECULE
 from chembl_sim.chembl.client import ChemblClient
 from chembl_sim.chembl.dump import ingest_from_dump
 from chembl_sim.chembl.loader import ingest_resource
@@ -99,7 +100,7 @@ with DAG(
         force = get_current_context()["params"]["force_reingest"]
         return ingest_resource(CHEMBL_ID_LOOKUP, release, force=force)
 
-    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
+    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS, outlets=[SILVER_MOLECULE])
     def build_silver() -> int:
         """Conform whichever branch just landed into the typed silver table."""
         return build_silver_molecule()

@@ -16,6 +16,8 @@ os.environ.setdefault("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
 
 BASE_ENV = {
     "CHEMBL_DWH_DSN": "postgresql://test:test@localhost:5432/test",
+    "CHEMBL_S3_BUCKET": "test-bucket",
+    "CHEMBL_S3_ROOT_PREFIX": "final_task/test_user",
 }
 
 

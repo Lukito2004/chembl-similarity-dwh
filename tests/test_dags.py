@@ -32,3 +32,20 @@ def test_silver_is_built_after_either_branch():
 
 def test_summarise_runs_after_silver():
     assert dag.get_task("summarise").upstream_task_ids == {"build_silver"}
+
+
+def test_the_ingest_publishes_the_silver_dataset():
+    from chembl_datasets import SILVER_MOLECULE
+
+    outlets = dag.get_task("build_silver").outlets
+    assert SILVER_MOLECULE in outlets
+
+
+def test_the_fingerprint_dag_consumes_the_silver_dataset():
+    from airflow.models import DagBag
+
+    from chembl_datasets import SILVER_MOLECULE
+
+    fingerprint_dag = DagBag("dags", include_examples=False).dags["fingerprint_build"]
+    triggers = list(fingerprint_dag.timetable.dataset_condition.objects)
+    assert triggers == [SILVER_MOLECULE]
