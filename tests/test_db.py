@@ -165,3 +165,23 @@ def test_upsert_builds_an_on_conflict_statement(monkeypatch):
 def test_upsert_of_no_rows_touches_nothing(monkeypatch):
     monkeypatch.setattr(db, "execute_values", lambda *a, **k: pytest.fail("should not run"))
     assert db.upsert_rows(RecordingCursor(), "bronze", "widget", ("chembl_id",), []) == 0
+
+
+def test_insert_builds_a_plain_statement(monkeypatch):
+    captured = {}
+
+    def fake_execute_values(cursor, statement, rows, page_size):
+        captured["statement"] = render_sql(statement)
+
+    monkeypatch.setattr(db, "execute_values", fake_execute_values)
+    count = db.insert_rows(
+        RecordingCursor(), "bronze", "input_compound", ("source_file", "source_row"), [("a", 2)]
+    )
+    assert count == 1
+    assert '"bronze"."input_compound"' in captured["statement"]
+    assert "ON CONFLICT" not in captured["statement"]
+
+
+def test_insert_of_no_rows_touches_nothing(monkeypatch):
+    monkeypatch.setattr(db, "execute_values", lambda *a, **k: pytest.fail("should not run"))
+    assert db.insert_rows(RecordingCursor(), "bronze", "input_compound", ("x",), []) == 0

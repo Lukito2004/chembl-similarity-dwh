@@ -82,3 +82,22 @@ def upsert_rows(
     )
     execute_values(cursor, statement, rows, page_size=page_size)
     return len(rows)
+
+
+def insert_rows(
+    cursor,
+    schema: str,
+    table: str,
+    columns: Sequence[str],
+    rows: Sequence[tuple],
+    page_size: int = 1000,
+) -> int:
+    """Bulk insert with no conflict handling, for a table the caller has just emptied."""
+    if not rows:
+        return 0
+    statement = sql.SQL("INSERT INTO {target} ({columns}) VALUES %s").format(
+        target=sql.Identifier(schema, table),
+        columns=sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+    )
+    execute_values(cursor, statement, rows, page_size=page_size)
+    return len(rows)
