@@ -18,6 +18,7 @@ BASE_ENV = {
     "CHEMBL_DWH_DSN": "postgresql://test:test@localhost:5432/test",
     "CHEMBL_S3_BUCKET": "test-bucket",
     "CHEMBL_S3_ROOT_PREFIX": "final_task/test_user",
+    "CHEMBL_INPUT_PREFIX": "input/test-user",
 }
 
 

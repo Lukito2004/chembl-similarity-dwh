@@ -58,6 +58,7 @@ class Settings:
     dump: DumpSettings
     s3: S3Settings
     fingerprint: FingerprintSettings
+    source: SourceSettings
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -67,6 +68,7 @@ class Settings:
             dump=DumpSettings.from_env(),
             s3=S3Settings.from_env(),
             fingerprint=FingerprintSettings.from_env(),
+            source=SourceSettings.from_env(),
         )
 
 
@@ -158,4 +160,19 @@ class FingerprintSettings:
             radius=env_integer("CHEMBL_FP_RADIUS", 2),
             n_bits=env_integer("CHEMBL_FP_N_BITS", 2048),
             shard_size=env_integer("CHEMBL_FP_SHARD_SIZE", 250_000),
+        )
+
+
+@dataclass(frozen=True)
+class SourceSettings:
+    """Where the personal input files live and how large the source set should be."""
+
+    input_prefix: str
+    target_size: int
+
+    @classmethod
+    def from_env(cls) -> SourceSettings:
+        return cls(
+            input_prefix=env_required("CHEMBL_INPUT_PREFIX").strip("/"),
+            target_size=env_integer("CHEMBL_SOURCE_TARGET_SIZE", 100),
         )
