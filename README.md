@@ -1,32 +1,32 @@
 # chembl-similarity-dwh
 
-Finds the top-10 most similar ChEMBL molecules for each compound in a personal input set,
-using Morgan fingerprints and Tanimoto similarity.
+For every compound in a personal input set, this project finds the ten most similar
+molecules in ChEMBL using Morgan fingerprints and Tanimoto similarity.
 
-The pipeline ingests ChEMBL into a medallion data warehouse on PostgreSQL, computes
-fingerprints and similarity scores, publishes the results to S3, and serves a star-schema
-data mart. ChEMBL is loaded either from the official release dump or from the public REST
-API, and both paths land identical data. Everything is orchestrated with Apache Airflow and
-runs from a single `docker compose up`.
+ChEMBL is loaded into a medallion warehouse on PostgreSQL, fingerprints and similarity
+scores are computed and published to S3 and a star schema data mart is built on top.
+Loading works from either the official release dump or the public REST API and both
+routes produce the same data. Apache Airflow orchestrates everything and the whole stack
+starts with one `docker compose up`.
 
 ## Running locally
 
-Requires Docker with Compose v2. The stack is five services: Airflow
-(webserver, scheduler, triggerer) on a LocalExecutor, its own metadata Postgres,
-and a separate Postgres holding the data warehouse.
+You need Docker with Compose v2. Five services come up: three Airflow processes
+(webserver, scheduler, triggerer) running a LocalExecutor, a Postgres for Airflow's own
+metadata and a second Postgres holding the warehouse.
 
 ```bash
 cp .env.example .env
 ```
 
-Generate the two Airflow secrets and paste them into `.env`:
+Two Airflow secrets have to be generated and pasted into `.env`:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Then:
+After that:
 
 ```bash
 docker compose build
@@ -39,36 +39,42 @@ docker compose ps
 | Airflow UI | `http://localhost:$AIRFLOW_WEB_PORT` (default 8080) | `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` |
 | Warehouse Postgres | `localhost:$CHEMBL_DWH_HOST_PORT` (default 5433) | `CHEMBL_DWH_USER` / `CHEMBL_DWH_PASSWORD` |
 
-The warehouse port is published so you can attach a SQL client and query the
-data mart directly. The Airflow metadata database is not published.
+The warehouse port is published so a SQL client can reach the data mart directly. Airflow's
+metadata database is deliberately not published.
 
-Tear down with `docker compose down`, or `docker compose down -v` to also drop
-both database volumes.
+`docker compose down` stops everything. Add `-v` to drop both database volumes as well.
 
 ## Pipeline
 
-Three DAGs, linked by an Airflow dataset rather than by schedule, so the downstream
-work starts when its input actually changes.
+Three DAGs. They are chained by an Airflow dataset instead of by schedule, so downstream
+work only starts once its input has actually been rebuilt.
 
 | DAG | Trigger | Does |
 | --- | --- | --- |
 | `chembl_ingest` | `@monthly` | Loads ChEMBL into `bronze`, then conforms it into `silver.molecule` |
 | `fingerprint_build` | `silver.molecule` dataset | Morgan fingerprints for every molecule, published to S3 |
 | `input_compounds` | `@daily` | Lands the personal input files and selects the source molecule set |
+| `similarity_mart` | both datasets above | Scores every source against ChEMBL and rebuilds the mart |
 
-`chembl_ingest` publishes the `chembl://warehouse/silver.molecule` dataset when
-`build_silver` succeeds; `fingerprint_build` is scheduled on that dataset and needs no
-schedule of its own. `input_compounds` is independent because the input files change on
-their own cadence.
+When `build_silver` finishes, `chembl_ingest` publishes the
+`chembl://warehouse/silver.molecule` dataset. `fingerprint_build` listens for it and
+carries no schedule of its own. `input_compounds` runs on its own timer because the input
+files arrive independently of any ChEMBL release.
 
-Every DAG is safe to re-run. `chembl_ingest` skips entirely when the release it finds is
-already loaded, the fingerprint shards are keyed deterministically so a retry overwrites
-rather than duplicates, and the source set is rebuilt wholesale each run.
+`similarity_mart` waits for both the fingerprints and the source set. Requiring both keeps
+its inputs consistent with each other. The cost is that a change to the source set alone
+does not start it, so that case is picked up either at the next fingerprint rebuild or by
+triggering the DAG by hand.
+
+Re-running any DAG is safe. `chembl_ingest` exits early if the release it finds is already
+loaded. Fingerprint shards use deterministic object keys, so a retry replaces a shard
+instead of adding one. The source set and the mart are both rebuilt from scratch on every
+run.
 
 ## Warehouse architecture
 
-The warehouse follows the medallion pattern over three data layers, plus a fourth schema
-that holds pipeline state so operational rows are never mistaken for data.
+Three medallion layers hold data. A fourth schema keeps pipeline state separate, so
+bookkeeping rows can never be confused with ChEMBL rows.
 
 | Schema | Holds | Rebuilt from |
 | --- | --- | --- |
@@ -77,23 +83,24 @@ that holds pipeline state so operational rows are never mistaken for data.
 | `gold` | the star schema data mart and its views | `silver` |
 | `meta` | ingest watermarks | not data |
 
-**Bronze is a faithful landing and stores nothing else.** The ChEMBL API returns decimal
-properties as JSON *strings* (`"alogp": "1.31"`, `"max_phase": "4.0"`) while returning
-integers as numbers, so bronze mirrors that split: `text` where the source sends text,
-`integer` where it sends an integer. Only primary keys are `NOT NULL`. A landing layer
-that rejects a row because of an unexpected value has failed at its one job.
+**Bronze stores the source as it arrives and nothing more.** ChEMBL's API hands back
+decimal properties as JSON *strings* (`"alogp": "1.31"`, `"max_phase": "4.0"`) while
+sending integers as real numbers. Bronze copies that split exactly: `text` for whatever
+arrives as text, `integer` for whatever arrives as an integer. Nothing but primary keys is
+`NOT NULL`. A landing layer that refuses a row over an unexpected value defeats its own
+purpose.
 
-**Silver is where the typing happens**, and it has to be total. Because bronze holds text,
-a naive `::numeric` cast would simply move the failure one layer downstream, so the
-conversion goes through `silver.safe_numeric`, which returns `NULL` for anything that is
-not a plain number rather than raising. Silver also applies the one business rule the whole
-pipeline depends on: a molecule without a compound structure cannot be fingerprinted or
-scored, so `silver.molecule` is restricted to the 2,897,819 molecules that have one.
+**Silver is responsible for typing. That conversion has to be total.** Since bronze
+holds text, a plain `::numeric` cast would only push the failure one layer along. Casting
+goes through `silver.safe_numeric` instead, which yields `NULL` for anything that is not a
+plain number rather than raising. Silver also enforces the rule the rest of the pipeline
+depends on: without a compound structure a molecule can be neither fingerprinted nor
+scored, so `silver.molecule` covers only the 2,897,819 molecules that have one.
 
-**Gold is the data mart** — `dim_molecule` and `fact_molecule_similarity` in a star schema,
-restricted to molecules the fact table actually references, plus the delivery views.
+**Gold is the data mart.** It holds `dim_molecule` and `fact_molecule_similarity` in a star
+schema, limited to molecules the fact table refers to, together with the delivery views.
 
-Current volumes:
+Volumes as loaded:
 
 | Table | Rows |
 | --- | --- |
@@ -103,93 +110,96 @@ Current volumes:
 | `bronze.compound_structures` | 2,897,819 |
 | `silver.molecule` | 2,897,819 |
 | `silver.source_molecule` | 100 |
+| `gold.dim_molecule` | 1,099 |
+| `gold.fact_molecule_similarity` | 1,000 |
 
-The warehouse occupies roughly 5.8 GB.
+The warehouse takes up roughly 5.8 GB on disk.
 
-Schema changes are applied with `CREATE TABLE IF NOT EXISTS`, which creates missing objects
-but never alters existing ones. Adding or changing a column therefore needs the warehouse
-volume recreated and the data reloaded. That is a deliberate trade for a warehouse that is
-fully reproducible from its sources, and it avoids pulling in a migration tool for a
-pipeline that can rebuild itself.
+DDL is applied with `CREATE TABLE IF NOT EXISTS`. Missing objects get created, existing
+ones are never altered. Changing a column therefore means recreating the warehouse volume
+and reloading. That trade is deliberate: everything here can be rebuilt from its sources,
+which is cheaper than carrying a migration tool for a pipeline that regenerates itself.
 
 ## Ingesting ChEMBL
 
-The pipeline supports two ingest paths, selected by the `ingest_path` DAG parameter. Both
-land the identical bronze contract, so nothing downstream can tell them apart.
+Two ingest routes exist, chosen with the `ingest_path` DAG parameter. Both write the same
+bronze tables with the same column types, so nothing further down the pipeline can tell
+which one ran.
 
-- **`dump`** (default) downloads the official release archive, restores the four required
-  tables with `pg_restore`, and drains each into bronze.
-- **`api`** pages the ChEMBL REST API with a rate limiter, retry with exponential backoff,
-  and a resumable offset watermark.
+- **`dump`** (the default) fetches the official release archive, restores the four required
+  tables with `pg_restore` and drains each of them into bronze.
+- **`api`** pages the ChEMBL REST API behind a rate limiter, with exponential backoff on
+  retries and a resumable offset watermark.
 
 ### Why the dump is the default
 
-The REST API was measured repeatedly over one working day. The results did not converge:
+The REST API was timed several times across one working day. The numbers never settled:
 
 | Measurement | Result |
 | --- | --- |
-| Page latency, morning | 1.8 – 3.5 s |
-| Page latency, afternoon | 21 – 52 s, median 32.9 s |
+| Page latency, morning | 1.8 to 3.5 s |
+| Page latency, afternoon | 21 to 52 s, median 32.9 s |
 | 6 concurrent workers | 4.46 s/page, projecting **9.9 h** |
 | 12 concurrent workers | **5 of 12 requests returned HTTP 500** |
 | 24 concurrent workers | 0.55 s/page, projecting 1.3 h |
 | Later, healthy | 1.26 s/page (molecules), 0.68 s/page (lookup), projecting **~2 h** |
-| At one point | **complete outage — HTTP 500 on every endpoint for over 15 minutes** |
+| At one point | **total outage, HTTP 500 on every endpoint for more than 15 minutes** |
 
-Two things follow. First, no single figure honestly describes the API path, so the design
-has to tolerate the spread rather than assume a number: hence the retries, the resumable
-watermark, and a configurable worker count. Second, the server genuinely fails under
-concurrency — the 500s at twelve workers were not simulated.
+Two conclusions come out of that. There is no honest single figure for the API route, so
+the client is built to absorb the variance rather than assume a number: retries, a
+resumable watermark and a worker count that can be tuned. And the server really does fail
+under concurrency. The 500s at twelve workers were observed, not simulated.
 
-The decisive difference is bytes, not latency. **The API does not compress** — verified by
-comparing an explicit `Accept-Encoding: identity` request against a `gzip` one, which
-returned byte-identical sizes with no `content-encoding` header. So the two paths move very
-different amounts of data for the same result:
+Bytes turn out to matter more than latency. **The API sends no compression at all.** An
+explicit `Accept-Encoding: identity` request and a `gzip` request returned byte-identical
+sizes, with no `content-encoding` header on the response. The two routes therefore move
+very different volumes for the same result:
 
 | Path | Transferred | Observed wall time |
 | --- | --- | --- |
-| REST API, both endpoints | ~12.6 GB of uncompressed JSON | ~2 h when healthy, unbounded when not |
-| Release dump | **2.09 GB compressed** | ~12 min download, ~35 min restore and drain |
+| REST API, both endpoints | about 12.6 GB of uncompressed JSON | about 2h when healthy, unbounded when not |
+| Release dump | **2.09 GB compressed** | about 12min download, about 35min restore and drain |
 
-The course Q&A confirmed there is no requirement on the fetch mechanism, only that it must
-not be a manual operation. The dump path is fully automated inside Airflow — discovery,
-resumable download, SHA-256 verification, selective restore and drain are all tasks — so it
-meets that condition while moving six times fewer bytes and remaining available when the
-API is not.
+The course Q&A confirmed that no particular fetch mechanism is required, only that it must
+not be a manual step. Every part of the dump route is an Airflow task: discovery, the
+resumable download, SHA-256 verification, the selective restore and the drain. It satisfies
+that condition, moves roughly six times fewer bytes and keeps working when the API does
+not.
 
-The API path is kept, tested and runnable (`ingest_path=api`), and the rate limiter the
-course Q&A suggested is implemented in `chembl_sim/chembl/client.py`.
+The API route stays in the codebase, covered by tests and runnable with `ingest_path=api`.
+The rate limiter suggested in the course Q&A lives in `chembl_sim/chembl/client.py`.
 
-### Restoring without exhausting disk
+### Restoring without running out of disk
 
-A naive restore would hold each ChEMBL table twice — once in the staging schema and once in
-bronze — peaking near 20 GB. Instead each table is restored, drained into bronze and
-dropped in turn, so at most one staging table exists at a time and the peak stays near
-11 GB. `pg_restore` runs with `--section=pre-data --section=data`, skipping index and
-constraint creation, because each table is read exactly once by a hash join and a unique
-index over 2.9 million `standard_inchi` values would be pure waste.
+Restoring all four tables at once would keep two copies of each, one in the staging schema
+and one in bronze, with a peak close to 20 GB. Each table is instead restored, drained and
+dropped in turn, so only one staging table exists at any moment and the peak stays near
+11 GB. `pg_restore` is given `--section=pre-data --section=data`, which skips indexes and
+constraints. Every table is read exactly once by a hash join, so building a unique index
+across 2.9 million `standard_inchi` values would be wasted effort.
 
-The warehouse database runs PostgreSQL 17 to match the `pg_restore` client shipped in the
-Airflow image. A 17 client emits `SET transaction_timeout`, which a 16 server rejects, and
-the restore aborts on its first statement. Airflow's own metadata database stays on 16,
-which is the version Airflow 2.10 supports.
+The warehouse runs PostgreSQL 17 so that it matches the `pg_restore` client bundled in the
+Airflow image. A version 17 client emits `SET transaction_timeout`, a parameter a version
+16 server rejects, which aborts the restore on its very first statement. Airflow's metadata
+database stays on 16, the newest release Airflow 2.10 supports.
 
 ## Fingerprints
 
-Morgan fingerprints, radius 2 and 2048 bits as the task specifies, computed with RDKit's
-`rdFingerprintGenerator` and stored as **packed bytes** — `np.packbits` turns the 2048-bit
-vector into 256 bytes, rather than a 2048-character bit string.
+Morgan fingerprints at radius 2 and 2048 bits, as the task requires, generated by RDKit's
+`rdFingerprintGenerator`. They are kept as **packed bytes**: `np.packbits` compresses the
+2048-bit vector into 256 bytes instead of a 2048-character bit string.
 
-Measured throughput is 10,641 molecules per second on a single thread, so the entire
-library takes about 4.5 minutes. Work is still split into shards, but for
-retriability and bounded memory rather than speed: each shard is an independent Airflow
-mapped task that can be retried alone, and each writes exactly one parquet object.
+Throughput measures at 10,641 molecules per second on one thread, putting the whole library
+at roughly 4.5 minutes. The work is still divided into shards, though not for speed. Each
+shard is a separate Airflow mapped task, so it can be retried on its own, its memory use is
+bounded and it produces exactly one parquet object.
 
-Shard boundaries come from a single `row_number()` pass, and each shard then reads a
-contiguous `chembl_id` range through the primary key index. Deep `OFFSET` paging was
-rejected because the later shards would rescan millions of rows to reach their start.
+Shard boundaries come from one `row_number()` pass over the table. Each shard then reads a
+contiguous `chembl_id` range straight off the primary key index. Deep `OFFSET` paging was
+ruled out because later shards would have to scan past millions of rows just to reach their
+first one.
 
-Results of a full run:
+A full run produces:
 
 | Measure | Value |
 | --- | --- |
@@ -199,30 +209,30 @@ Results of a full run:
 | Duplicate identifiers | **0** |
 | Molecules RDKit could not parse | 17 |
 
-Zero duplicates across 2.9 million rows is the check that matters: because the shards are
-contiguous key ranges, an off-by-one would show as either overlap or a gap, and neither
-occurred.
+The zero matters most. Shards are contiguous key ranges, so any off-by-one would surface
+either as duplicated identifiers or as a gap in coverage. Neither appeared.
 
-The 165 MB is far below what the raw arithmetic suggests (2.9M × 256 B ≈ 740 MB). Morgan
-fingerprints are sparse — typically around 43 of 2048 bits set — so the packed bytes are
-mostly zeros and compress about fourfold under zstd.
+165 MB is well under the 740 MB the arithmetic suggests (2.9M multiplied by 256 B). Morgan
+fingerprints are sparse, with roughly 43 of the 2048 bits set, so most of each packed
+vector is zeros and zstd compresses it around fourfold.
 
 ## The source molecule set
 
-The task asks for the top 10 most similar molecules for each of 100 chosen molecules. The
-personal input files under `input/luka-javakhishvili/` supply 58 rows across five files,
-and they identify compounds by **name**, not by ChEMBL identifier or structure.
+The task calls for the ten nearest neighbours of each of 100 chosen molecules. The personal
+input files under `input/luka-javakhishvili/` hold 58 rows spread over five files and they
+name compounds by **name**, with no ChEMBL identifier and no structure.
 
-The five files also disagree on their columns: `batch_004.csv` has no `logp`, and
-`batch_005.csv` uses `IC50_nM` and `collection_date` where the others use `ic50_nm` and
-`assay_date`. Headers are therefore normalised to lower case and mapped onto the union of
-all columns, with absent columns landing as `NULL`.
+Those five files do not agree on their columns either. `batch_004.csv` omits `logp` and
+`batch_005.csv` writes `IC50_nM` and `collection_date` where the rest use `ic50_nm` and
+`assay_date`. Headers are lowercased and mapped onto the union of every column seen and
+anything a file omits lands as `NULL`.
 
-Names are resolved against ChEMBL's preferred names. Of 57 named rows, **56 resolve to
-exactly one molecule** and none resolve ambiguously. The remaining set is topped up to 100
-from molecules ordered by `md5(chembl_id)` — deterministic, reproducible on any machine,
-and spread across the whole library rather than clustered on the earliest ChEMBL entries as
-ordering by identifier would be. Re-running the selection reproduces the identical 100.
+Compound names are matched against ChEMBL preferred names. Out of 57 named rows, **56 match
+exactly one molecule** and not one matches more than one. The set is then filled up to 100
+using molecules sorted by `md5(chembl_id)`. That ordering is deterministic, gives the same
+answer on any machine and scatters the choice across the whole library instead of bunching
+it on the lowest ChEMBL identifiers the way sorting by identifier would. Running the
+selection again reproduces exactly the same 100.
 
 | Origin | Count |
 | --- | --- |
@@ -230,32 +240,32 @@ ordering by identifier would be. Re-running the selection reproduces the identic
 | `top_up` | 44 |
 | **Total** | **100** |
 
-Every source molecule records its `origin`, so the composition is auditable in one query.
+Each row carries its `origin`, so the makeup of the set can be checked with one query.
 
-Two input rows are rejected, and both are recorded in `silver.source_molecule_rejected`
-with a reason rather than silently dropped:
+Two input rows do not make it in. Both are written to `silver.source_molecule_rejected`
+with a reason instead of being quietly discarded:
 
 | File | Compound | Reason |
 | --- | --- | --- |
 | `batch_004.csv` | *(blank)* | compound name is blank |
 | `batch_001.csv` | Paracetamol | name matches no ChEMBL preferred name |
 
-Paracetamol is a real name collision rather than a data error: ChEMBL records it under
-`ACETAMINOPHEN`. Resolving it would need the `molecule_synonyms` table, which is outside
-the four tables this project is asked to ingest, so it is left as a documented rejection.
+Paracetamol is a naming difference rather than bad data. ChEMBL files it under
+`ACETAMINOPHEN`. Matching it would need the `molecule_synonyms` table, which falls outside
+the four tables this project ingests, so it stays a recorded rejection.
 
 ## Similarity search
 
-Tanimoto similarity is computed directly on the packed bytes: the intersection is
-`popcount(a AND b)` and the union is `popcount(a) + popcount(b) - intersection`. Library
-popcounts are computed once per run and reused for every source.
+Tanimoto is calculated straight on the packed bytes. The intersection is
+`popcount(a AND b)`. The union is `popcount(a) + popcount(b) - intersection`. Library
+popcounts are worked out once at the start of a run and reused for every source afterwards.
 
-Airflow 2.10 pins numpy to 1.26, which predates `np.bitwise_count`, so a 256-entry lookup
-table supplies the popcount. The code uses the native operation when the numpy version
-offers one, so nothing needs changing if the pin moves.
+Airflow 2.10 pins numpy at 1.26, which is older than `np.bitwise_count`, so a 256-entry
+lookup table stands in for it. The code picks the native operation whenever the installed
+numpy provides one, so lifting that pin needs no change here.
 
-Scoring is blocked at 250,000 molecules so the intermediate `AND` never materialises for
-the whole library at once. Measured on the full set:
+Scoring runs in blocks of 250,000 molecules so the intermediate `AND` never has to exist
+for the entire library at once. Measured over the full set:
 
 | Measure | Value |
 | --- | --- |
@@ -264,59 +274,67 @@ the whole library at once. Measured on the full set:
 | Library popcounts | 1.7 s, once per run |
 | Scoring, one source against all | **1.70 s** |
 | 100 source molecules | **2.8 min** |
+| Full task, including the S3 upload | **24.5 min** |
 | Peak resident memory | 2.1 GB |
 
-Because loading the library costs two orders of magnitude more than scoring a single
-source, the whole search runs as one task rather than as mapped tasks — parallelising it
-would pay the 192 second load again in every worker.
+Loading the library costs two orders of magnitude more than scoring a single source
+against it. The entire search therefore runs inside one task rather than being spread over
+mapped tasks, since splitting it would make every worker pay that 192 second load again.
 
-Ties matter more than they might appear. Tanimoto over 2048-bit fingerprints yields
-rationals with small denominators, so identical scores are common rather than rare. The
-top-N selection therefore takes every molecule at or above the Nth score, orders by score
-descending then by identifier ascending so the result is deterministic, and sets
-`has_duplicates_of_last_largest_score` on the included rows holding the boundary score
-whenever more molecules share it than there is room for.
+Ties deserve more attention than they first appear to. Tanimoto over 2048-bit fingerprints
+produces ratios with small denominators, which makes equal scores ordinary rather than
+unusual. Selection takes every molecule scoring at or above the tenth value, sorts by score
+descending and then by identifier ascending so the outcome is repeatable and marks
+`has_duplicates_of_last_largest_score` on whichever selected rows sit at that boundary
+score, but only when more molecules share it than there is room for.
 
-Across the 100 source molecules the search produces 1,000 top-10 rows, of which 40 carry
-`has_duplicates_of_last_largest_score`, spread over 24 sources. Boundary ties are the
-common case rather than an edge case, which is why the flag exists.
+Over the 100 sources the search returns 1,000 rows, 40 of which carry that flag, spread
+across 24 different sources. Boundary ties are the normal case here, which is the reason
+the flag exists at all.
 
-Each source molecule's full score table is written to S3 as a self-contained parquet
-object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
-source column costs nothing — it dictionary-encodes to a single entry — so the file is the
-same size as a minimal one while remaining readable on its own. With zstd each is about
-15.5 MB, roughly 1.55 GB for all 100, against 27.4 MB each under snappy.
+Every source molecule gets its complete score table written to S3 as a standalone parquet
+object holding `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. Repeating the
+source on every row is free, because it dictionary-encodes down to a single entry, so the
+object is no larger than a stripped-down one would be and can still be read on its own.
+Under zstd each comes to about 7.1 MB, or 0.71 GB for all 100. A benchmark on uniformly
+random floats predicted 15.5 MB apiece, but real scores cluster near zero and are heavily
+quantised, so they compress more than twice as well.
+
+Scores are calculated in double precision and archived as float32. The two were compared
+directly over twenty sources and 58 million comparisons: identical top-10 ordering,
+identical tie flags, identical counts of distinct values. Float32 loses nothing the search
+can act on. What it does do is print exact ratios badly, turning 7/10 into 0.69999999, so
+the values that reach the mart are computed as doubles while the S3 archive stays float32
+and half the size. Rounding was considered and rejected. At six decimal places genuinely
+different scores would collide, because two Tanimoto values can sit as little as 1/2048
+squared apart.
+
+Some pairs score exactly 1.0 and those results are correct. Morgan fingerprints capture
+connectivity but not stereochemistry, so at radius 2 both enantiomers of pregabalin,
+`CC(C)C[C@H](CN)CC(=O)O` and `CC(C)C[C@@H](CN)CC(=O)O`, along with the version that leaves
+stereochemistry unspecified, all reduce to the same bit vector. Salt and parent forms
+collide in the same way. A source molecule is always removed from its own results, so a
+perfect score always points at a genuinely different ChEMBL entry the fingerprint cannot
+tell apart.
 
 ## Known data gaps
 
-**`cx_logp` and `molecular_species` are always `NULL`.** Both columns are required in the
-dimension table, and neither exists in ChEMBL 37. This is not an API limitation: the
-official schema documentation for the release lists `COMPOUND_PROPERTIES` with 15 columns
-— `molregno` plus `mw_freebase`, `alogp`, `hba`, `hbd`, `psa`, `rtb`, `ro3_pass`,
+**`cx_logp` and `molecular_species` are always `NULL`.** The dimension table is required to
+carry both and neither exists in ChEMBL 37. This is not a limitation of the API. The
+official schema documentation for the release gives `COMPOUND_PROPERTIES` 15 columns:
+`molregno`, plus `mw_freebase`, `alogp`, `hba`, `hbd`, `psa`, `rtb`, `ro3_pass`,
 `num_ro5_violations`, `full_mwt`, `aromatic_rings`, `heavy_atoms`, `qed_weighted`,
-`full_molformula` and `np_likeness_score` — and neither field is among them. The columns
-are kept in `silver.molecule` and `gold.dim_molecule` so the schema matches the
-specification and a backfill from an older release has somewhere to land.
+`full_molformula` and `np_likeness_score`. Neither field appears anywhere in that list.
+Both columns are kept in `silver.molecule` and `gold.dim_molecule` so the schema still
+matches the specification and so a backfill from an earlier release would have somewhere
+to go.
 
-**17 molecules have no fingerprint.** Their SMILES cannot be parsed by RDKit. They are
-counted and logged per shard rather than failing the run.
+**17 molecules end up with no fingerprint.** RDKit cannot parse their SMILES. They are
+counted and reported per shard rather than being allowed to fail the run.
 
-Each source molecule's full score table is written to S3 as a self-contained parquet
-object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
-source column costs nothing — it dictionary-encodes to a single entry — so the file is the
-same size as a minimal one while remaining readable on its own. Under zstd each object is
-about 7.1 MB, 0.71 GB for all 100. A benchmark against uniform random floats predicted
-15.5 MB each; real scores cluster near zero and are heavily quantised, so they compress
-more than twice as well.
-
-Scoring is done in double precision and archived as float32. Float32 was measured against
-float64 over twenty sources and 58 million comparisons: the top-10 ordering, the tie flags
-and the count of distinct values were identical, so float32 loses nothing the search can
-distinguish. It does however render exact ratios awkwardly — 7/10 becomes 0.69999999 — so
-the values that reach the mart are computed as doubles, while the S3 archive keeps float32
-and stays half the size. Rounding was rejected: at six decimal places distinct scores
-would genuinely collide, since two Tanimoto values can differ by as little as 1/2048².
-
-And add a row to the measurement table:
-
-| Full task, including the S3 upload | **24.5 min** |
+**Two columns depend on which ingest route ran.** The API exposes `resource_url` on
+`chembl_id_lookup` and has no `entity_id`. The release dump is the other way round. Bronze
+carries both columns and each route fills only the one its source actually provides.
+Neither route invents the other's value. `helm_notation` behaves the same way and is filled
+only by the API route, since the ChEMBL schema keeps it on `biotherapeutics` rather than on
+`molecule_dictionary`.
