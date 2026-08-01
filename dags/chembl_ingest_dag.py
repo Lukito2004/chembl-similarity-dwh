@@ -18,6 +18,7 @@ from chembl_sim.chembl.loader import ingest_resource
 from chembl_sim.chembl.records import CHEMBL_ID_LOOKUP, MOLECULE
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.storage.db import apply_sql_directory, warehouse_connection
+from chembl_sim.transform.silver import build_silver_molecule
 
 log = get_logger(__name__)
 
@@ -99,19 +100,26 @@ with DAG(
         return ingest_resource(CHEMBL_ID_LOOKUP, release, force=force)
 
     @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
+    def build_silver() -> int:
+        """Conform whichever branch just landed into the typed silver table."""
+        return build_silver_molecule()
+
+    @task
     def summarise() -> dict[str, int]:
-        """Report what bronze holds, whichever branch produced it."""
+        """Report what the warehouse holds, whichever branch produced it."""
         counts: dict[str, int] = {}
         with warehouse_connection() as conn, conn.cursor() as cursor:
             for table in BRONZE_TABLES:
                 cursor.execute(f"SELECT count(*) FROM bronze.{table}")
-                counts[table] = cursor.fetchone()[0]
+                counts[f"bronze.{table}"] = cursor.fetchone()[0]
+            cursor.execute("SELECT count(*) FROM silver.molecule")
+            counts["silver.molecule"] = cursor.fetchone()[0]
             cursor.execute(
                 "SELECT resource, chembl_release, is_complete FROM meta.ingest_watermark"
             )
             watermarks = cursor.fetchall()
         for table, count in counts.items():
-            log.info("bronze.%s holds %s rows", table, count)
+            log.info("%s holds %s rows", table, count)
         for resource, release, complete in watermarks:
             log.info("watermark %s at %s, complete=%s", resource, release, complete)
         return counts
@@ -122,8 +130,10 @@ with DAG(
     api_release = fetch_api_release()
     molecules = ingest_molecules(api_release)
     lookup = ingest_chembl_id_lookup(api_release)
+    silver = build_silver()
     report = summarise()
 
     ddl >> branch
-    branch >> dump_load >> report
-    branch >> api_release >> molecules >> lookup >> report
+    branch >> dump_load >> silver
+    branch >> api_release >> molecules >> lookup >> silver
+    silver >> report

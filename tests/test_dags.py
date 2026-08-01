@@ -16,13 +16,19 @@ def test_only_the_two_known_paths_are_accepted():
     assert dag.params.get_param("ingest_path").schema["enum"] == ["dump", "api"]
 
 
-def test_summarise_runs_after_either_branch():
-    assert dag.get_task("summarise").trigger_rule == "none_failed_min_one_success"
-
-
 def test_molecules_are_ingested_before_the_lookup():
     assert "ingest_chembl_id_lookup" in dag.get_task("ingest_molecules").downstream_task_ids
 
 
 def test_ddl_runs_before_the_branch():
     assert "choose_ingest_path" in dag.get_task("apply_ddl").downstream_task_ids
+
+
+def test_silver_is_built_after_either_branch():
+    assert dag.get_task("build_silver").trigger_rule == "none_failed_min_one_success"
+    upstream = dag.get_task("build_silver").upstream_task_ids
+    assert upstream == {"load_from_dump", "ingest_chembl_id_lookup"}
+
+
+def test_summarise_runs_after_silver():
+    assert dag.get_task("summarise").upstream_task_ids == {"build_silver"}
