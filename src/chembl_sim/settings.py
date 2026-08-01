@@ -56,6 +56,8 @@ class Settings:
     dwh: DwhSettings
     api: ApiSettings
     dump: DumpSettings
+    s3: S3Settings
+    fingerprint: FingerprintSettings
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -63,6 +65,8 @@ class Settings:
             dwh=DwhSettings.from_env(),
             api=ApiSettings.from_env(),
             dump=DumpSettings.from_env(),
+            s3=S3Settings.from_env(),
+            fingerprint=FingerprintSettings.from_env(),
         )
 
 
@@ -113,4 +117,45 @@ class DumpSettings:
             download_dir=Path(env_text("CHEMBL_DUMP_DIR", "/opt/airflow/data")),
             chunk_size=env_integer("CHEMBL_DUMP_CHUNK_SIZE", 8 * 1024 * 1024),
             timeout_seconds=env_integer("CHEMBL_DUMP_TIMEOUT_SECONDS", 300),
+        )
+
+
+@dataclass(frozen=True)
+class S3Settings:
+    """Bucket and prefixes. Prefixes are stored without surrounding slashes."""
+
+    bucket: str
+    root_prefix: str
+
+    @classmethod
+    def from_env(cls) -> S3Settings:
+        return cls(
+            bucket=env_required("CHEMBL_S3_BUCKET"),
+            root_prefix=env_required("CHEMBL_S3_ROOT_PREFIX").strip("/"),
+        )
+
+
+@dataclass(frozen=True)
+class FingerprintSettings:
+    """Morgan parameters. radius and n_bits are fixed by the task specification."""
+
+    radius: int
+    n_bits: int
+    shard_size: int
+
+    def __post_init__(self) -> None:
+        if self.n_bits % 8:
+            raise ValueError(f"CHEMBL_FP_N_BITS must be a multiple of 8, got {self.n_bits}")
+
+    @property
+    def n_bytes(self) -> int:
+        """Packed width of one fingerprint. 2048 bits fit into 256 bytes."""
+        return self.n_bits // 8
+
+    @classmethod
+    def from_env(cls) -> FingerprintSettings:
+        return cls(
+            radius=env_integer("CHEMBL_FP_RADIUS", 2),
+            n_bits=env_integer("CHEMBL_FP_N_BITS", 2048),
+            shard_size=env_integer("CHEMBL_FP_SHARD_SIZE", 250_000),
         )

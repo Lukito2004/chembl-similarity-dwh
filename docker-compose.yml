@@ -30,6 +30,13 @@ x-airflow-common: &airflow-common
     CHEMBL_DUMP_CHUNK_SIZE: ${CHEMBL_DUMP_CHUNK_SIZE}
     CHEMBL_DUMP_TIMEOUT_SECONDS: ${CHEMBL_DUMP_TIMEOUT_SECONDS}
     PYTHONPATH: /opt/airflow/src
+    AWS_PROFILE: ${AWS_PROFILE}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    CHEMBL_S3_BUCKET: ${CHEMBL_S3_BUCKET}
+    CHEMBL_S3_ROOT_PREFIX: ${CHEMBL_S3_ROOT_PREFIX}
+    CHEMBL_FP_RADIUS: ${CHEMBL_FP_RADIUS}
+    CHEMBL_FP_N_BITS: ${CHEMBL_FP_N_BITS}
+    CHEMBL_FP_SHARD_SIZE: ${CHEMBL_FP_SHARD_SIZE}
     # The warehouse is reached two ways: our library uses the DSN, Airflow operators
     # use the connection. Both are assembled from the same five .env values.
     CHEMBL_DWH_DSN: postgresql://${CHEMBL_DWH_USER}:${CHEMBL_DWH_PASSWORD}@${CHEMBL_DWH_HOST}:${CHEMBL_DWH_PORT}/${CHEMBL_DWH_NAME}
@@ -41,6 +48,7 @@ x-airflow-common: &airflow-common
     - ./logs:/opt/airflow/logs
     - ./sql:/opt/airflow/sql:ro
     - ./data:/opt/airflow/data
+    - ${HOME}/.aws:/home/airflow/.aws
   user: "${AIRFLOW_UID:-50000}:0"
 
 services:
