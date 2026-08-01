@@ -39,6 +39,8 @@ x-airflow-common: &airflow-common
     CHEMBL_FP_SHARD_SIZE: ${CHEMBL_FP_SHARD_SIZE}
     CHEMBL_INPUT_PREFIX: ${CHEMBL_INPUT_PREFIX}
     CHEMBL_SOURCE_TARGET_SIZE: ${CHEMBL_SOURCE_TARGET_SIZE}
+    CHEMBL_SIMILARITY_TOP_N: ${CHEMBL_SIMILARITY_TOP_N}
+    CHEMBL_SIMILARITY_BLOCK_SIZE: ${CHEMBL_SIMILARITY_BLOCK_SIZE}
     # The warehouse is reached two ways: our library uses the DSN, Airflow operators
     # use the connection. Both are assembled from the same five .env values.
     CHEMBL_DWH_DSN: postgresql://${CHEMBL_DWH_USER}:${CHEMBL_DWH_PASSWORD}@${CHEMBL_DWH_HOST}:${CHEMBL_DWH_PORT}/${CHEMBL_DWH_NAME}

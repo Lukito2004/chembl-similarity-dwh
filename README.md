@@ -244,6 +244,49 @@ Paracetamol is a real name collision rather than a data error: ChEMBL records it
 `ACETAMINOPHEN`. Resolving it would need the `molecule_synonyms` table, which is outside
 the four tables this project is asked to ingest, so it is left as a documented rejection.
 
+## Similarity search
+
+Tanimoto similarity is computed directly on the packed bytes: the intersection is
+`popcount(a AND b)` and the union is `popcount(a) + popcount(b) - intersection`. Library
+popcounts are computed once per run and reused for every source.
+
+Airflow 2.10 pins numpy to 1.26, which predates `np.bitwise_count`, so a 256-entry lookup
+table supplies the popcount. The code uses the native operation when the numpy version
+offers one, so nothing needs changing if the pin moves.
+
+Scoring is blocked at 250,000 molecules so the intermediate `AND` never materialises for
+the whole library at once. Measured on the full set:
+
+| Measure | Value |
+| --- | --- |
+| Library size | 2,897,802 fingerprints, 742 MB packed |
+| Load from S3 | 192 s |
+| Library popcounts | 1.7 s, once per run |
+| Scoring, one source against all | **1.70 s** |
+| 100 source molecules | **2.8 min** |
+| Peak resident memory | 2.1 GB |
+
+Because loading the library costs two orders of magnitude more than scoring a single
+source, the whole search runs as one task rather than as mapped tasks — parallelising it
+would pay the 192 second load again in every worker.
+
+Ties matter more than they might appear. Tanimoto over 2048-bit fingerprints yields
+rationals with small denominators, so identical scores are common rather than rare. The
+top-N selection therefore takes every molecule at or above the Nth score, orders by score
+descending then by identifier ascending so the result is deterministic, and sets
+`has_duplicates_of_last_largest_score` on the included rows holding the boundary score
+whenever more molecules share it than there is room for.
+
+Across the 100 source molecules the search produces 1,000 top-10 rows, of which 40 carry
+`has_duplicates_of_last_largest_score`, spread over 24 sources. Boundary ties are the
+common case rather than an edge case, which is why the flag exists.
+
+Each source molecule's full score table is written to S3 as a self-contained parquet
+object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
+source column costs nothing — it dictionary-encodes to a single entry — so the file is the
+same size as a minimal one while remaining readable on its own. With zstd each is about
+15.5 MB, roughly 1.55 GB for all 100, against 27.4 MB each under snappy.
+
 ## Known data gaps
 
 **`cx_logp` and `molecular_species` are always `NULL`.** Both columns are required in the
