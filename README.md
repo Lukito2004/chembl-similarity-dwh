@@ -317,6 +317,107 @@ collide in the same way. A source molecule is always removed from its own result
 perfect score always points at a genuinely different ChEMBL entry the fingerprint cannot
 tell apart.
 
+## Data mart views
+
+Five views sit on the star schema. Four are ordinary SQL files applied alongside the rest
+of the DDL. The fifth has to be generated at run time, because its columns are data rather
+than schema.
+
+| View | Task | Rows | Answers |
+| --- | --- | --- | --- |
+| `gold.v_avg_similarity_per_source` | 7a | 100 | mean similarity of each source molecule |
+| `gold.v_avg_alogp_deviation` | 7b | 100 | mean absolute alogp gap between a source and its matches |
+| `gold.v_similarity_pivot` | 8a | 100 | ten source molecules as columns, targets as rows |
+| `gold.v_similarity_neighbours` | 8b | 1000 | each match with the next one down plus the source's second best |
+| `gold.v_avg_similarity_rollup` | 8c | 214 | averages at four levels of grouping |
+
+### Averages per source molecule
+
+```
+ source_chembl_id | avg_tanimoto_score
+------------------+--------------------
+ CHEMBL1168       |         0.97110389
+ CHEMBL1200699    |         0.96475421
+ CHEMBL809        |         0.96203007
+```
+
+The alogp view reports a mean *absolute* deviation, which is the option the course Q&A
+recommended. Pairs where either molecule has no alogp contribute nothing, since `avg`
+skips nulls. A deviation of zero is real rather than a bug: several sources have ten
+matches that all share their alogp, which fits the stereoisomer collisions described above.
+
+### The pivot
+
+Ten source molecules become ten real columns. The lowest ten identifiers are used so the
+same columns come back on every rebuild. Rendering happens in `chembl_sim/transform/views.py`
+with `psycopg2.sql.Identifier` doing the quoting, since the column names come from data.
+The view is dropped before it is recreated, because `CREATE OR REPLACE VIEW` cannot rename
+a view's columns.
+
+```
+ target_chembl_id | CHEMBL1059 | CHEMBL1064 | CHEMBL1082
+------------------+------------+------------+------------
+ CHEMBL1314217    |            | 1.00000000 |
+ CHEMBL1414674    |            | 1.00000000 |
+ CHEMBL167003     | 1.00000000 |            |
+ CHEMBL190074     | 0.66666667 |            |
+```
+
+Only three of the eleven columns are shown here. Most cells are empty by construction: the
+fact table holds ten matches per source, so a target usually belongs to one source column
+only. A JSON map would have been denser but harder for a downstream tool to consume, so
+real columns were kept.
+
+### Neighbours
+
+```
+ source_chembl_id | target_chembl_id | tanimoto_score | next_most_similar_target | second_most_similar_target
+------------------+------------------+----------------+--------------------------+----------------------------
+ CHEMBL25         | CHEMBL3833404    |     0.88888889 | CHEMBL350343             | CHEMBL350343
+ CHEMBL25         | CHEMBL350343     |     0.85714286 | CHEMBL5282669            | CHEMBL350343
+ CHEMBL25         | CHEMBL5282669    |     0.74074074 | CHEMBL4515737            | CHEMBL350343
+```
+
+`next_most_similar_target` is a `lead` over the source's matches ordered by score. The
+`second_most_similar_target` column stays constant down the whole partition, because it
+names the source's own second best match rather than anything relative to the current row.
+That reading was the one confirmed in the course Q&A. It needs an explicit
+`ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` frame: the default frame stops
+at the current row, which would leave the first row null. Ordering breaks ties on the
+identifier so the view returns the same answer every time.
+
+### The rollup
+
+Four grouping sets in one pass with no `UNION` anywhere, which the task requires:
+
+```
+ source_molecule | aromatic_rings | heavy_atoms |   avg
+-----------------+----------------+-------------+----------
+ CHEMBL25        | TOTAL          | TOTAL       | 0.720156
+ TOTAL           | 1              | 13          | 0.720156
+ TOTAL           | TOTAL          | 13          | 0.760855
+ TOTAL           | TOTAL          | TOTAL       | 0.760359
+```
+
+The 214 rows break down as 100 by source molecule, 72 by aromatic rings together with
+heavy atoms, 41 by heavy atoms alone, plus the single grand total.
+
+`grouping()` is what makes `TOTAL` correct. It reports whether a null came from the
+rollup collapsing a column or was already in the data, so only the first kind is relabelled.
+One source molecule, `CHEMBL4860540`, is typed `Unknown` in ChEMBL with no aromatic rings,
+heavy atoms or alogp recorded. Its rows therefore show a genuinely empty cell rather than
+`TOTAL`:
+
+```
+ source_molecule | aromatic_rings | heavy_atoms |   avg
+-----------------+----------------+-------------+----------
+ TOTAL           |                |             | 0.717386
+ TOTAL           | TOTAL          |             | 0.717386
+```
+
+Using `coalesce` instead would have relabelled those as `TOTAL` and folded a molecule with
+unknown properties into the grand total.
+
 ## Known data gaps
 
 **`cx_logp` and `molecular_species` are always `NULL`.** The dimension table is required to
