@@ -57,3 +57,30 @@ def test_the_input_dag_runs_ddl_then_load_then_selection():
     input_dag = DagBag("dags", include_examples=False).dags["input_compounds"]
     assert input_dag.get_task("load_input_files").upstream_task_ids == {"apply_ddl"}
     assert input_dag.get_task("select_source_molecules").upstream_task_ids == {"load_input_files"}
+
+
+def test_the_mart_dag_waits_for_both_inputs():
+    from airflow.models import DagBag
+
+    from chembl_datasets import FINGERPRINTS, SOURCE_MOLECULE
+
+    mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
+    triggers = set(mart_dag.timetable.dataset_condition.objects)
+    assert triggers == {FINGERPRINTS, SOURCE_MOLECULE}
+
+
+def test_the_fingerprint_dag_publishes_only_when_complete():
+    from airflow.models import DagBag
+
+    from chembl_datasets import FINGERPRINTS
+
+    fingerprint_dag = DagBag("dags", include_examples=False).dags["fingerprint_build"]
+    assert FINGERPRINTS in fingerprint_dag.get_task("summarise").outlets
+    assert not fingerprint_dag.get_task("build_shard").outlets
+
+
+def test_the_mart_is_built_after_the_search():
+    from airflow.models import DagBag
+
+    mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
+    assert mart_dag.get_task("build_mart").upstream_task_ids == {"compute_similarity"}
