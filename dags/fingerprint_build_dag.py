@@ -8,7 +8,7 @@ import pendulum
 from airflow.decorators import task
 from airflow.models.dag import DAG
 
-from chembl_datasets import SILVER_MOLECULE
+from chembl_datasets import FINGERPRINTS, SILVER_MOLECULE
 from chembl_sim.chem.fingerprints import fingerprint_rows
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import get_settings
@@ -108,7 +108,7 @@ with DAG(
             "bytes": size,
         }
 
-    @task
+    @task(outlets=[FINGERPRINTS])
     def summarise(results: list[dict]) -> dict:
         """Total what was published, so a partial run is obvious in the logs."""
         totals = {

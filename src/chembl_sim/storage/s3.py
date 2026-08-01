@@ -6,19 +6,25 @@ import io
 from collections.abc import Sequence
 
 import boto3
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import S3Settings, get_settings
+from functools import lru_cache
 
 log = get_logger(__name__)
 
 FINGERPRINTS_FOLDER = "fingerprints"
 
 
+@lru_cache(maxsize=1)
 def s3_client():
-    """A client using the standard credential chain, which resolves the SSO profile."""
+    """A client using the standard credential chain, which resolves the SSO profile.
+
+    Cached because each new session re-reads and re-parses the SSO token from disk.
+    """
     return boto3.Session().client("s3")
 
 
@@ -90,3 +96,35 @@ def read_text(key: str, settings: S3Settings | None = None) -> str:
     settings = settings or get_settings().s3
     body = s3_client().get_object(Bucket=settings.bucket, Key=key)["Body"].read()
     return body.decode("utf-8", errors="replace")
+
+
+SIMILARITY_FOLDER = "similarity_scores"
+
+
+def similarity_prefix(settings: S3Settings | None = None) -> str:
+    settings = settings or get_settings().s3
+    return f"{settings.root_prefix}/{SIMILARITY_FOLDER}"
+
+
+def similarity_key(source_chembl_id: str, settings: S3Settings | None = None) -> str:
+    """One object per source molecule, named after it so a rerun overwrites in place."""
+    return f"{similarity_prefix(settings)}/{source_chembl_id}.parquet"
+
+
+def similarity_table(
+    source_chembl_id: str,
+    target_ids: pa.Array,
+    scores: np.ndarray,
+) -> pa.Table:
+    """Self-contained score table: the source is a column, not just the file name.
+
+    Scores are computed in double precision but archived as float32, which halves the
+    object size without losing any value the search can distinguish.
+    """
+    return pa.table(
+        {
+            "source_chembl_id": pa.array([source_chembl_id] * len(scores), pa.string()),
+            "target_chembl_id": target_ids,
+            "tanimoto_score": pa.array(scores.astype(np.float32)),
+        }
+    )

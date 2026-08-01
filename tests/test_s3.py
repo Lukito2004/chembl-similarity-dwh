@@ -39,3 +39,29 @@ def test_fingerprints_survive_a_parquet_round_trip():
     buffer.seek(0)
     restored = pq.read_table(buffer)
     assert restored.column("fingerprint").to_pylist() == original
+
+
+def test_similarity_objects_are_named_after_their_source(settings):
+    assert (
+        s3.similarity_key("CHEMBL25", settings)
+        == "final_task/test_user/similarity_scores/CHEMBL25.parquet"
+    )
+
+
+def test_the_similarity_table_is_self_contained():
+    import numpy as np
+    import pyarrow as pa
+
+    scores = np.array([0.5, 0.25], dtype=np.float32)
+    table = s3.similarity_table("CHEMBL25", pa.array(["CHEMBL1", "CHEMBL2"]), scores)
+    assert table.column_names == ["source_chembl_id", "target_chembl_id", "tanimoto_score"]
+    assert table.column("source_chembl_id").to_pylist() == ["CHEMBL25", "CHEMBL25"]
+
+
+def test_the_archive_stores_scores_as_float32():
+    import numpy as np
+    import pyarrow as pa
+
+    scores = np.array([0.7, 0.25], dtype=np.float64)
+    table = s3.similarity_table("CHEMBL25", pa.array(["CHEMBL1", "CHEMBL2"]), scores)
+    assert table.schema.field("tanimoto_score").type == pa.float32()

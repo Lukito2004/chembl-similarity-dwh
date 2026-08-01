@@ -58,5 +58,17 @@ CREATE TABLE IF NOT EXISTS silver.source_molecule_rejected (
     CONSTRAINT source_molecule_rejected_pkey PRIMARY KEY (source_file, source_row)
 );
 
+-- Top matches staged before the mart load, so the gold tables are populated by a
+-- single set-based statement rather than row by row from Python.
+CREATE TABLE IF NOT EXISTS silver.similarity_top (
+    source_chembl_id text NOT NULL,
+    target_chembl_id text NOT NULL,
+    tanimoto_score numeric(9, 8) NOT NULL,
+    has_duplicates_of_last_largest_score boolean NOT NULL,
+    match_rank integer NOT NULL,
+    computed_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT similarity_top_pkey PRIMARY KEY (source_chembl_id, target_chembl_id)
+);
+
 COMMENT ON COLUMN silver.molecule.cx_logp IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';
 COMMENT ON COLUMN silver.molecule.molecular_species IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';
