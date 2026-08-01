@@ -13,6 +13,7 @@ from airflow.operators.python import get_current_context
 from airflow.utils.trigger_rule import TriggerRule
 
 from chembl_datasets import SILVER_MOLECULE
+from chembl_sim.alerting import notify_failure
 from chembl_sim.chembl.client import ChemblClient
 from chembl_sim.chembl.dump import ingest_from_dump
 from chembl_sim.chembl.loader import ingest_resource
@@ -50,6 +51,7 @@ with DAG(
         "retries": 2,
         "retry_delay": timedelta(minutes=10),
         "execution_timeout": timedelta(hours=12),
+        "on_failure_callback": notify_failure,
     },
     params={
         "ingest_path": Param(

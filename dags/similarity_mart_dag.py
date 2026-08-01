@@ -10,6 +10,7 @@ from airflow.decorators import task
 from airflow.models.dag import DAG
 
 from chembl_datasets import FINGERPRINTS, SOURCE_MOLECULE
+from chembl_sim.alerting import notify_failure, notify_success
 from chembl_sim.chem.search import run_similarity_search
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.storage.db import apply_sql_directory, warehouse_connection
@@ -32,6 +33,7 @@ with DAG(
         "retries": 1,
         "retry_delay": timedelta(minutes=5),
         "execution_timeout": timedelta(hours=2),
+        "on_failure_callback": notify_failure,
     },
 ) as dag:
 
@@ -61,7 +63,7 @@ with DAG(
         """The pivot's columns are the chosen source molecules, so it is generated."""
         return create_pivot_view()
 
-    @task
+    @task(on_success_callback=notify_success)
     def summarise(search: dict, mart: dict) -> dict:
         totals = {**search, **mart}
         log.info("Similarity mart rebuilt: %s", totals)

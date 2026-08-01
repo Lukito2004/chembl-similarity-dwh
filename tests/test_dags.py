@@ -91,3 +91,18 @@ def test_the_pivot_is_built_after_the_mart():
 
     mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
     assert mart_dag.get_task("build_pivot_view").upstream_task_ids == {"build_mart"}
+
+
+def test_every_dag_alerts_on_failure():
+    from airflow.models import DagBag
+
+    from chembl_sim.alerting import notify_failure
+
+    bag = DagBag("dags", include_examples=False)
+    assert not bag.import_errors
+    for dag_id in ("chembl_ingest", "fingerprint_build", "input_compounds", "similarity_mart"):
+        for task in bag.dags[dag_id].tasks:
+            callbacks = task.on_failure_callback
+            if not isinstance(callbacks, list | tuple):
+                callbacks = [callbacks]
+            assert notify_failure in callbacks, f"{dag_id}.{task.task_id}"

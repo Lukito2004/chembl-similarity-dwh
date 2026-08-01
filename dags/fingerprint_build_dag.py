@@ -9,6 +9,7 @@ from airflow.decorators import task
 from airflow.models.dag import DAG
 
 from chembl_datasets import FINGERPRINTS, SILVER_MOLECULE
+from chembl_sim.alerting import notify_failure
 from chembl_sim.chem.fingerprints import fingerprint_rows
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import get_settings
@@ -55,6 +56,7 @@ with DAG(
         "retries": 2,
         "retry_delay": timedelta(minutes=2),
         "execution_timeout": timedelta(hours=2),
+        "on_failure_callback": notify_failure,
     },
 ) as dag:
 
