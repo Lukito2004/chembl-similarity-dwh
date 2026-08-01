@@ -111,11 +111,15 @@ def similarity_table(
     target_ids: pa.Array,
     scores: np.ndarray,
 ) -> pa.Table:
-    """Self-contained score table: the source is a column, not just the file name."""
+    """Self-contained score table: the source is a column, not just the file name.
+
+    Scores are computed in double precision but archived as float32, which halves the
+    object size without losing any value the search can distinguish.
+    """
     return pa.table(
         {
             "source_chembl_id": pa.array([source_chembl_id] * len(scores), pa.string()),
             "target_chembl_id": target_ids,
-            "tanimoto_score": pa.array(scores),
+            "tanimoto_score": pa.array(scores.astype(np.float32)),
         }
     )

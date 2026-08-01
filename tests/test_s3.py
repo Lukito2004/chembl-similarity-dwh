@@ -56,3 +56,12 @@ def test_the_similarity_table_is_self_contained():
     table = s3.similarity_table("CHEMBL25", pa.array(["CHEMBL1", "CHEMBL2"]), scores)
     assert table.column_names == ["source_chembl_id", "target_chembl_id", "tanimoto_score"]
     assert table.column("source_chembl_id").to_pylist() == ["CHEMBL25", "CHEMBL25"]
+
+
+def test_the_archive_stores_scores_as_float32():
+    import numpy as np
+    import pyarrow as pa
+
+    scores = np.array([0.7, 0.25], dtype=np.float64)
+    table = s3.similarity_table("CHEMBL25", pa.array(["CHEMBL1", "CHEMBL2"]), scores)
+    assert table.schema.field("tanimoto_score").type == pa.float32()

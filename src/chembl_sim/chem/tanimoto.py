@@ -91,9 +91,11 @@ def tanimoto_scores(
     """Score one fingerprint against the whole library.
 
     Blocked so the intermediate AND never materialises for every molecule at once.
+    Scores are double precision so exact ratios such as 7/10 survive rounding into the
+    mart's eight decimal places; float32 renders that as 0.69999999.
     """
     total = len(library)
-    scores = np.zeros(total, dtype=np.float32)
+    scores = np.zeros(total, dtype=np.float64)
     for start in range(0, total, block_size):
         stop = min(start + block_size, total)
         intersection = popcount(np.bitwise_and(library.fingerprints[start:stop], query)).sum(
@@ -101,7 +103,7 @@ def tanimoto_scores(
         )
         union = library.popcounts[start:stop] + query_popcount - intersection
         # Two empty fingerprints have an empty union; that scores zero rather than one.
-        np.divide(intersection, union, out=scores[start:stop], where=union > 0, casting="unsafe")
+        np.divide(intersection, union, out=scores[start:stop], where=union > 0)
     return scores
 
 

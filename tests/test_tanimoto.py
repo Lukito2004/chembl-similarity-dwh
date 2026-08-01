@@ -11,6 +11,12 @@ def library(bit_patterns, ids=None):
     return tanimoto.FingerprintLibrary.from_arrays(np.array(names, dtype=tanimoto.ID_DTYPE), packed)
 
 
+def library2(rows, ids=None):
+    packed = np.array(rows, dtype=np.uint8)
+    names = ids or [f"CHEMBL{i}" for i in range(len(rows))]
+    return tanimoto.FingerprintLibrary.from_arrays(np.array(names, dtype=tanimoto.ID_DTYPE), packed)
+
+
 def test_popcount_matches_unpackbits():
     values = np.arange(256, dtype=np.uint8)
     assert np.array_equal(tanimoto.popcount(values), np.unpackbits(values[:, None], axis=1).sum(1))
@@ -138,3 +144,17 @@ def test_a_wrong_fingerprint_width_is_rejected():
     )
     with pytest.raises(ValueError, match="fingerprint bytes"):
         tanimoto.FingerprintLibrary.from_table(table, n_bytes=256)
+
+
+def test_scores_are_double_precision():
+    lib = library([0b00001111])
+    scores = tanimoto.tanimoto_scores(lib, np.array([0b00001111], dtype=np.uint8), 4)
+    assert scores.dtype == np.float64
+
+
+def test_a_clean_ratio_survives_to_eight_decimals():
+    # query has 8 bits, target 9, intersection 7, so the union is 10 and the score is 7/10.
+    lib = library2([[0b11111110, 0b11000000]])
+    query = np.array([0b11111111, 0b00000000], dtype=np.uint8)
+    scores = tanimoto.tanimoto_scores(lib, query, 8)
+    assert round(float(scores[0]), 8) == 0.7

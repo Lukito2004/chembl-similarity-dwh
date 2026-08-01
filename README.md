@@ -301,9 +301,22 @@ specification and a backfill from an older release has somewhere to land.
 **17 molecules have no fingerprint.** Their SMILES cannot be parsed by RDKit. They are
 counted and logged per shard rather than failing the run.
 
-**Two columns depend on the ingest path.** The API exposes `resource_url` on
-`chembl_id_lookup` but has no `entity_id`; the release dump is the reverse. Bronze holds
-both columns and each path fills only what its source actually provides. Neither path
-invents the other's value. For the same reason `helm_notation` is populated only by the API
-path, since in the ChEMBL schema it belongs to the `biotherapeutics` table rather than
-`molecule_dictionary`.
+Each source molecule's full score table is written to S3 as a self-contained parquet
+object carrying `source_chembl_id`, `target_chembl_id` and `tanimoto_score`. The constant
+source column costs nothing — it dictionary-encodes to a single entry — so the file is the
+same size as a minimal one while remaining readable on its own. Under zstd each object is
+about 7.1 MB, 0.71 GB for all 100. A benchmark against uniform random floats predicted
+15.5 MB each; real scores cluster near zero and are heavily quantised, so they compress
+more than twice as well.
+
+Scoring is done in double precision and archived as float32. Float32 was measured against
+float64 over twenty sources and 58 million comparisons: the top-10 ordering, the tie flags
+and the count of distinct values were identical, so float32 loses nothing the search can
+distinguish. It does however render exact ratios awkwardly — 7/10 becomes 0.69999999 — so
+the values that reach the mart are computed as doubles, while the S3 archive keeps float32
+and stays half the size. Rounding was rejected: at six decimal places distinct scores
+would genuinely collide, since two Tanimoto values can differ by as little as 1/2048².
+
+And add a row to the measurement table:
+
+| Full task, including the S3 upload | **24.5 min** |
