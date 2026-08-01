@@ -84,3 +84,10 @@ def test_the_mart_is_built_after_the_search():
 
     mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
     assert mart_dag.get_task("build_mart").upstream_task_ids == {"compute_similarity"}
+
+
+def test_the_pivot_is_built_after_the_mart():
+    from airflow.models import DagBag
+
+    mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
+    assert mart_dag.get_task("build_pivot_view").upstream_task_ids == {"build_mart"}

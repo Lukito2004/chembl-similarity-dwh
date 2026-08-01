@@ -14,6 +14,7 @@ from chembl_sim.chem.search import run_similarity_search
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.storage.db import apply_sql_directory, warehouse_connection
 from chembl_sim.transform.mart import load_mart
+from chembl_sim.transform.views import create_pivot_view
 
 log = get_logger(__name__)
 
@@ -56,6 +57,11 @@ with DAG(
         return {"dimension_rows": load.dimension_rows, "fact_rows": load.fact_rows}
 
     @task
+    def build_pivot_view() -> list[str]:
+        """The pivot's columns are the chosen source molecules, so it is generated."""
+        return create_pivot_view()
+
+    @task
     def summarise(search: dict, mart: dict) -> dict:
         totals = {**search, **mart}
         log.info("Similarity mart rebuilt: %s", totals)
@@ -69,6 +75,7 @@ with DAG(
     ddl = apply_ddl()
     search = compute_similarity()
     mart = build_mart()
+    pivot = build_pivot_view()
+    report = summarise(search, mart)
 
-    ddl >> search >> mart
-    summarise(search, mart)
+    ddl >> search >> mart >> pivot >> report
