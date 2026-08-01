@@ -72,6 +72,23 @@ CREATE TABLE IF NOT EXISTS bronze.compound_structures (
     loaded_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- The five input files disagree on columns: batch_004 has no logp, batch_005 uses
+-- IC50_nM and collection_date. Everything lands as text, exactly as delivered.
+CREATE TABLE IF NOT EXISTS bronze.input_compound (
+    source_file text NOT NULL,
+    source_row integer NOT NULL,
+    compound_id text,
+    compound_name text,
+    molecular_weight text,
+    logp text,
+    ic50_nm text,
+    assay_date text,
+    collection_date text,
+    lab_id text,
+    loaded_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT input_compound_pkey PRIMARY KEY (source_file, source_row)
+);
+
 COMMENT ON TABLE bronze.molecule_dictionary IS 'Scalar top-level fields of the molecule endpoint; nested entities are out of scope';
 COMMENT ON COLUMN bronze.molecule_dictionary.max_phase IS 'The API returns this as a string such as 4.0, cast to numeric in silver';
 COMMENT ON COLUMN bronze.compound_properties.ro3_pass IS 'The API returns Y or N, cast to boolean in silver';

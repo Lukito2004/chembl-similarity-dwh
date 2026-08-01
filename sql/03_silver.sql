@@ -36,5 +36,27 @@ LANGUAGE sql IMMUTABLE AS $$
     END;
 $$;
 
+-- The source set the similarity search runs over. Input compounds are matched to
+-- ChEMBL by preferred name; the remainder is topped up to the configured size.
+CREATE TABLE IF NOT EXISTS silver.source_molecule (
+    chembl_id text PRIMARY KEY,
+    canonical_smiles text NOT NULL,
+    origin text NOT NULL,
+    input_compound_id text,
+    input_compound_name text,
+    selected_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT source_molecule_origin_check CHECK (origin IN ('input_file', 'top_up'))
+);
+
+CREATE TABLE IF NOT EXISTS silver.source_molecule_rejected (
+    source_file text NOT NULL,
+    source_row integer NOT NULL,
+    compound_id text,
+    compound_name text,
+    reason text NOT NULL,
+    rejected_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT source_molecule_rejected_pkey PRIMARY KEY (source_file, source_row)
+);
+
 COMMENT ON COLUMN silver.molecule.cx_logp IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';
 COMMENT ON COLUMN silver.molecule.molecular_species IS 'Not present in ChEMBL 37, kept as a landing spot for an older-release backfill';

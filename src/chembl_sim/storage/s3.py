@@ -83,3 +83,10 @@ def delete_prefix(prefix: str, settings: S3Settings | None = None) -> int:
         )
     log.info("Deleted %s objects under %s", len(keys), prefix)
     return len(keys)
+
+
+def read_text(key: str, settings: S3Settings | None = None) -> str:
+    """Fetch a small text object, tolerating the odd non-UTF-8 byte."""
+    settings = settings or get_settings().s3
+    body = s3_client().get_object(Bucket=settings.bucket, Key=key)["Body"].read()
+    return body.decode("utf-8", errors="replace")
