@@ -65,3 +65,24 @@ def test_the_archive_stores_scores_as_float32():
     scores = np.array([0.7, 0.25], dtype=np.float64)
     table = s3.similarity_table("CHEMBL25", pa.array(["CHEMBL1", "CHEMBL2"]), scores)
     assert table.schema.field("tanimoto_score").type == pa.float32()
+
+
+def test_a_table_survives_the_upload_and_download(monkeypatch, settings):
+    import io
+
+    store = {}
+
+    class StubClient:
+        def upload_fileobj(self, buffer, bucket, key):
+            store[(bucket, key)] = buffer.read()
+
+        def download_fileobj(self, bucket, key, buffer):
+            buffer.write(store[(bucket, key)])
+
+    monkeypatch.setattr(s3, "s3_client", StubClient)
+    table = s3.fingerprint_table(["CHEMBL1"], [b"\x01" * 256])
+    size = s3.write_parquet(table, "some/key.parquet", settings)
+    assert size > 0
+    restored = s3.read_parquet("some/key.parquet", settings)
+    assert restored.column("fingerprint")[0].as_py() == b"\x01" * 256
+    assert isinstance(io.BytesIO(), io.BytesIO)
