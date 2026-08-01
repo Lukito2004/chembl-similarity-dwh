@@ -10,6 +10,7 @@ from airflow.decorators import task
 from airflow.models.dag import DAG
 
 from chembl_datasets import SOURCE_MOLECULE
+from chembl_sim.alerting import notify_failure
 from chembl_sim.inputs.batch_csv import BRONZE_COLUMNS, parse_batch_csv
 from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import get_settings
@@ -29,7 +30,11 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["chembl", "source"],
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=2)},
+    default_args={
+        "retries": 2,
+        "retry_delay": timedelta(minutes=2),
+        "on_failure_callback": notify_failure,
+    },
 ) as dag:
 
     @task

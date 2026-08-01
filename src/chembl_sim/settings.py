@@ -60,6 +60,7 @@ class Settings:
     fingerprint: FingerprintSettings
     source: SourceSettings
     similarity: SimilaritySettings
+    alerts: AlertSettings
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -71,6 +72,7 @@ class Settings:
             fingerprint=FingerprintSettings.from_env(),
             source=SourceSettings.from_env(),
             similarity=SimilaritySettings.from_env(),
+            alerts=AlertSettings.from_env(),
         )
 
 
@@ -192,4 +194,19 @@ class SimilaritySettings:
         return cls(
             top_n=env_integer("CHEMBL_SIMILARITY_TOP_N", 10),
             block_size=env_integer("CHEMBL_SIMILARITY_BLOCK_SIZE", 250_000),
+        )
+
+
+@dataclass(frozen=True)
+class AlertSettings:
+    """Teams webhook. Alerting is skipped when no URL is configured."""
+
+    webhook_url: str | None
+    timeout_seconds: int
+
+    @classmethod
+    def from_env(cls) -> AlertSettings:
+        return cls(
+            webhook_url=env_text("CHEMBL_TEAMS_WEBHOOK_URL", "") or None,
+            timeout_seconds=env_integer("CHEMBL_TEAMS_TIMEOUT_SECONDS", 15),
         )

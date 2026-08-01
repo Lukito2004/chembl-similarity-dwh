@@ -41,6 +41,8 @@ x-airflow-common: &airflow-common
     CHEMBL_SOURCE_TARGET_SIZE: ${CHEMBL_SOURCE_TARGET_SIZE}
     CHEMBL_SIMILARITY_TOP_N: ${CHEMBL_SIMILARITY_TOP_N}
     CHEMBL_SIMILARITY_BLOCK_SIZE: ${CHEMBL_SIMILARITY_BLOCK_SIZE}
+    CHEMBL_TEAMS_WEBHOOK_URL: ${CHEMBL_TEAMS_WEBHOOK_URL}
+    CHEMBL_TEAMS_TIMEOUT_SECONDS: ${CHEMBL_TEAMS_TIMEOUT_SECONDS}
     # The warehouse is reached two ways: our library uses the DSN, Airflow operators
     # use the connection. Both are assembled from the same five .env values.
     CHEMBL_DWH_DSN: postgresql://${CHEMBL_DWH_USER}:${CHEMBL_DWH_PASSWORD}@${CHEMBL_DWH_HOST}:${CHEMBL_DWH_PORT}/${CHEMBL_DWH_NAME}
@@ -54,6 +56,11 @@ x-airflow-common: &airflow-common
     - ./data:/opt/airflow/data
     - ${HOME}/.aws:/home/airflow/.aws
   user: "${AIRFLOW_UID:-50000}:0"
+  # The Teams webhook resolves through a six hop CNAME chain that some local resolvers
+  # reject. Pinning public DNS keeps notifications working regardless of the host.
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
 
 services:
   postgres-airflow:
