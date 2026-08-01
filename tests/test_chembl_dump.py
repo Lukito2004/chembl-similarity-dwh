@@ -204,3 +204,24 @@ def test_watermark_resources_match_the_api_resources():
     from chembl_sim.chembl.records import RESOURCES
 
     assert set(dump.WATERMARK_RESOURCES) == {resource.name for resource in RESOURCES}
+
+
+def test_an_already_extracted_dump_is_not_rewritten(tmp_path):
+    archive = build_archive(tmp_path, {"chembl_37/chembl_37_postgresql.dmp": b"PGDMP-data"})
+    out = tmp_path / "out"
+    out.mkdir()
+    first = dump.extract_dump(archive, out)
+    first.write_bytes(b"PGDMP-data")
+    stamp = first.stat().st_mtime_ns
+    again = dump.extract_dump(archive, out)
+    assert again == first
+    assert again.stat().st_mtime_ns == stamp
+
+
+def test_a_truncated_dump_is_extracted_again(tmp_path):
+    archive = build_archive(tmp_path, {"chembl_37/chembl_37_postgresql.dmp": b"PGDMP-data"})
+    out = tmp_path / "out"
+    out.mkdir()
+    target = out / "chembl_37_postgresql.dmp"
+    target.write_bytes(b"trunc")
+    assert dump.extract_dump(archive, out).read_bytes() == b"PGDMP-data"
