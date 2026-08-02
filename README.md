@@ -797,7 +797,7 @@ the table the source set tops up from, so one of them can in principle be chosen
 That case is not silent: the similarity search refuses to run when a source molecule has no
 fingerprint, rather than returning a set one molecule short.
 
-**Two columns depend on which ingest route ran.** The API exposes `resource_url` on
+**Some columns depend on which ingest route ran.** The API exposes `resource_url` on
 `chembl_id_lookup` and has no `entity_id`. The release dump is the other way round. Bronze
 carries both columns and each route fills only the one its source actually provides.
 Neither route invents the other's value. `helm_notation` behaves the same way and is filled
