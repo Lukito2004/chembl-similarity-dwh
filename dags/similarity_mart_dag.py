@@ -7,12 +7,15 @@ from pathlib import Path
 
 import pendulum
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException
 from airflow.models.dag import DAG
+from airflow.operators.python import get_current_context
 
 from chembl_datasets import FINGERPRINTS, SOURCE_MOLECULE
 from chembl_sim.alerting import notify_failure, notify_success
 from chembl_sim.chem.search import run_similarity_search
 from chembl_sim.logging_setup import get_logger
+from chembl_sim.quality.runner import QualityGateError, run_checks
 from chembl_sim.storage.db import apply_sql_directory, warehouse_connection
 from chembl_sim.transform.mart import load_mart
 from chembl_sim.transform.views import create_pivot_view
@@ -59,6 +62,15 @@ with DAG(
         return {"dimension_rows": load.dimension_rows, "fact_rows": load.fact_rows}
 
     @task
+    def run_quality_checks() -> dict[str, int]:
+        """Runs between the mart and the pivot, so a bad mart never reaches the views."""
+        try:
+            return run_checks(get_current_context()["run_id"], layers=("gold",)).summary()
+        except QualityGateError as exc:
+            # A failed check is deterministic, so retrying it only delays the alert.
+            raise AirflowFailException(str(exc)) from exc
+
+    @task
     def build_pivot_view() -> list[str]:
         """The pivot's columns are the chosen source molecules, so it is generated."""
         return create_pivot_view()
@@ -77,7 +89,8 @@ with DAG(
     ddl = apply_ddl()
     search = compute_similarity()
     mart = build_mart()
+    quality = run_quality_checks()
     pivot = build_pivot_view()
     report = summarise(search, mart)
 
-    ddl >> search >> mart >> pivot >> report
+    ddl >> search >> mart >> quality >> pivot >> report

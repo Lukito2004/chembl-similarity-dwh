@@ -418,6 +418,59 @@ heavy atoms or alogp recorded. Its rows therefore show a genuinely empty cell ra
 Using `coalesce` instead would have relabelled those as `TOTAL` and folded a molecule with
 unknown properties into the grand total.
 
+## Data quality gate
+
+Every layer that writes data is checked before the run continues. The checks live in
+`src/chembl_sim/quality/checks.py` as one SQL query each, and the gate runs as a task inside
+the DAG that produced the data.
+
+Checks that restate a table constraint are deliberately absent. The score range, the primary
+keys and the fact's two foreign keys are already enforced by the database, so a check on them
+can never fail. What is checked is everything the schema cannot express.
+
+| Check | Layer | Severity |
+|---|---|---|
+| `silver_molecule_is_populated` | silver | block |
+| `silver_conversion_keeps_every_structure` | silver | block |
+| `silver_smiles_is_never_blank` | silver | block |
+| `silver_numeric_cast_drops_nothing` | silver | block |
+| `every_input_row_is_accounted_for` | source | block |
+| `source_set_reaches_the_configured_size` | source | warn |
+| `fact_excludes_self_matches` | gold | block |
+| `fact_holds_the_top_n_for_every_source` | gold | block |
+| `fact_sources_come_from_the_source_set` | gold | block |
+| `dim_holds_no_unreferenced_molecules` | gold | block |
+| `tie_flag_sits_only_on_the_boundary_score` | gold | block |
+| `tie_flag_agrees_across_the_boundary_score` | gold | block |
+| `dim_alogp_coverage_stays_high` | gold | warn |
+| `release_gap_columns_are_still_empty` | gold | warn |
+
+A blocking failure raises, which fails the task, stops the DAG before the next layer is built
+and sends the same Teams notification every other failure sends. A warning is recorded then
+logged, leaving the run alone.
+
+Three of these are worth singling out. `silver_conversion_keeps_every_structure` is the
+executable form of the claim that the bronze to silver conversion has to be total.
+`silver_numeric_cast_drops_nothing` makes `safe_numeric` accountable, since turning an
+unparseable value into null is silent by design. `release_gap_columns_are_still_empty` is
+inverted on purpose: it fires when `cx_logp` or `molecular_species` start arriving, so a
+later release that fills the documented gap announces itself instead of going unnoticed.
+
+The gate also owns the outlet datasets. `SILVER_MOLECULE` and `SOURCE_MOLECULE` are published
+by the check task rather than by the task that built the layer, so a layer that failed its
+checks cannot trigger the DAG downstream of it.
+
+Every result is kept, one row per check per run:
+
+    SELECT * FROM meta.v_quality_latest ORDER BY layer, check_name;
+
+Keeping the history rather than only the current state means a regression can be traced back
+to the run that introduced it.
+
+A blocking failure is raised as AirflowFailException, so the task fails on the first attempt instead of retrying. Re-running a check against unchanged data cannot produce a different answer, and the configured retry would only delay the alert. Any other error, a dropped connection for instance, still retries normally.
+
+This is an addition beyond the required scope. Nothing in the specification asks for it and the pipeline meets every requirement without it.
+
 ## Failure notifications
 
 Every task in all four DAGs carries an `on_failure_callback` that posts to a Microsoft
