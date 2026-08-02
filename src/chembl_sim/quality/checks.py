@@ -90,12 +90,25 @@ def build_checks(settings: Settings | None = None) -> tuple[Check, ...]:
             name="silver_numeric_cast_drops_nothing",
             layer="silver",
             severity=BLOCK,
-            expected="0 values lost to the cast",
+            expected="0 rows with a value lost to the cast",
+            # One aggregate over six columns rather than six aggregates. Six drove the
+            # planner into a parallel hash join that exhausts the container's shared memory.
             query="""
                 SELECT count(*)
                 FROM bronze.compound_properties p
                 JOIN silver.molecule m ON m.chembl_id = p.chembl_id
-                WHERE p.alogp IS NOT NULL AND btrim(p.alogp) <> '' AND m.alogp IS NULL
+                WHERE (p.alogp IS NOT NULL
+                        AND btrim(p.alogp) <> '' AND m.alogp IS NULL)
+                   OR (p.mw_freebase IS NOT NULL
+                        AND btrim(p.mw_freebase) <> '' AND m.mw_freebase IS NULL)
+                   OR (p.full_mwt IS NOT NULL
+                        AND btrim(p.full_mwt) <> '' AND m.full_mwt IS NULL)
+                   OR (p.psa IS NOT NULL
+                        AND btrim(p.psa) <> '' AND m.psa IS NULL)
+                   OR (p.qed_weighted IS NOT NULL
+                        AND btrim(p.qed_weighted) <> '' AND m.qed_weighted IS NULL)
+                   OR (p.np_likeness_score IS NOT NULL
+                        AND btrim(p.np_likeness_score) <> '' AND m.np_likeness_score IS NULL)
             """,
         ),
         Check(
