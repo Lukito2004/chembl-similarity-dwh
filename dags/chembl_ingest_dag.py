@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pendulum
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException
 from airflow.models.dag import DAG
 from airflow.models.param import Param
 from airflow.operators.python import get_current_context
@@ -19,6 +20,7 @@ from chembl_sim.chembl.dump import ingest_from_dump
 from chembl_sim.chembl.loader import ingest_resource
 from chembl_sim.chembl.records import CHEMBL_ID_LOOKUP, MOLECULE
 from chembl_sim.logging_setup import get_logger
+from chembl_sim.quality.runner import QualityGateError, run_checks
 from chembl_sim.storage.db import apply_sql_directory, warehouse_connection
 from chembl_sim.transform.silver import build_silver_molecule
 
@@ -102,10 +104,19 @@ with DAG(
         force = get_current_context()["params"]["force_reingest"]
         return ingest_resource(CHEMBL_ID_LOOKUP, release, force=force)
 
-    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS, outlets=[SILVER_MOLECULE])
+    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
     def build_silver() -> int:
         """Conform whichever branch just landed into the typed silver table."""
         return build_silver_molecule()
+
+    @task(outlets=[SILVER_MOLECULE])
+    def run_quality_checks() -> dict[str, int]:
+        """Publishes the dataset only once silver passed, so a bad layer cannot fan out."""
+        try:
+            return run_checks(get_current_context()["run_id"], layers=("silver",)).summary()
+        except QualityGateError as exc:
+            # A failed check is deterministic, so retrying it only delays the alert.
+            raise AirflowFailException(str(exc)) from exc
 
     @task
     def summarise() -> dict[str, int]:
@@ -134,9 +145,10 @@ with DAG(
     molecules = ingest_molecules(api_release)
     lookup = ingest_chembl_id_lookup(api_release)
     silver = build_silver()
+    quality = run_quality_checks()
     report = summarise()
 
     ddl >> branch
     branch >> dump_load >> silver
     branch >> api_release >> molecules >> lookup >> silver
-    silver >> report
+    silver >> quality >> report

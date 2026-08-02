@@ -7,12 +7,15 @@ from pathlib import Path
 
 import pendulum
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException
 from airflow.models.dag import DAG
+from airflow.operators.python import get_current_context
 
 from chembl_datasets import SOURCE_MOLECULE
 from chembl_sim.alerting import notify_failure
 from chembl_sim.inputs.batch_csv import BRONZE_COLUMNS, parse_batch_csv
 from chembl_sim.logging_setup import get_logger
+from chembl_sim.quality.runner import QualityGateError, run_checks
 from chembl_sim.settings import get_settings
 from chembl_sim.storage.db import apply_sql_directory, insert_rows, warehouse_connection
 from chembl_sim.storage.s3 import list_keys, read_text
@@ -63,7 +66,7 @@ with DAG(
                 )
         return loaded
 
-    @task(outlets=[SOURCE_MOLECULE])
+    @task
     def select_source_molecules() -> dict:
         """Resolve input names to ChEMBL, then top up to the configured size."""
         selection = build_source_molecules()
@@ -74,4 +77,13 @@ with DAG(
             "rejected": selection.rejected,
         }
 
-    apply_ddl() >> load_input_files() >> select_source_molecules()
+    @task(outlets=[SOURCE_MOLECULE])
+    def run_quality_checks() -> dict[str, int]:
+        """Every input row must be either selected or rejected before this publishes."""
+        try:
+            return run_checks(get_current_context()["run_id"], layers=("source",)).summary()
+        except QualityGateError as exc:
+            # A failed check is deterministic, so retrying it only delays the alert.
+            raise AirflowFailException(str(exc)) from exc
+
+    apply_ddl() >> load_input_files() >> select_source_molecules() >> run_quality_checks()

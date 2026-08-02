@@ -30,15 +30,16 @@ def test_silver_is_built_after_either_branch():
     assert upstream == {"load_from_dump", "ingest_chembl_id_lookup"}
 
 
-def test_summarise_runs_after_silver():
-    assert dag.get_task("summarise").upstream_task_ids == {"build_silver"}
+def test_summarise_runs_after_the_quality_gate():
+    assert dag.get_task("summarise").upstream_task_ids == {"run_quality_checks"}
+    assert dag.get_task("run_quality_checks").upstream_task_ids == {"build_silver"}
 
 
-def test_the_ingest_publishes_the_silver_dataset():
+def test_the_silver_dataset_publishes_only_after_the_gate():
     from chembl_datasets import SILVER_MOLECULE
 
-    outlets = dag.get_task("build_silver").outlets
-    assert SILVER_MOLECULE in outlets
+    assert not dag.get_task("build_silver").outlets
+    assert SILVER_MOLECULE in dag.get_task("run_quality_checks").outlets
 
 
 def test_the_fingerprint_dag_consumes_the_silver_dataset():
@@ -86,11 +87,12 @@ def test_the_mart_is_built_after_the_search():
     assert mart_dag.get_task("build_mart").upstream_task_ids == {"compute_similarity"}
 
 
-def test_the_pivot_is_built_after_the_mart():
+def test_the_pivot_is_built_after_the_gate_clears_the_mart():
     from airflow.models import DagBag
 
     mart_dag = DagBag("dags", include_examples=False).dags["similarity_mart"]
-    assert mart_dag.get_task("build_pivot_view").upstream_task_ids == {"build_mart"}
+    assert mart_dag.get_task("build_pivot_view").upstream_task_ids == {"run_quality_checks"}
+    assert mart_dag.get_task("run_quality_checks").upstream_task_ids == {"build_mart"}
 
 
 def test_every_dag_alerts_on_failure():
@@ -106,3 +108,30 @@ def test_every_dag_alerts_on_failure():
             if not isinstance(callbacks, list | tuple):
                 callbacks = [callbacks]
             assert notify_failure in callbacks, f"{dag_id}.{task.task_id}"
+
+
+def test_the_source_dataset_publishes_only_after_the_gate():
+    from airflow.models import DagBag
+
+    from chembl_datasets import SOURCE_MOLECULE
+
+    input_dag = DagBag("dags", include_examples=False).dags["input_compounds"]
+    assert not input_dag.get_task("select_source_molecules").outlets
+    assert SOURCE_MOLECULE in input_dag.get_task("run_quality_checks").outlets
+
+
+def test_a_failed_check_fails_the_task_without_retrying(monkeypatch):
+    import pytest
+    from airflow.exceptions import AirflowFailException
+
+    import similarity_mart_dag
+    from chembl_sim.quality.runner import QualityGateError
+
+    def refuse(*args, **kwargs):
+        raise QualityGateError("dim_holds_no_unreferenced_molecules observed 3, expected 0")
+
+    monkeypatch.setattr(similarity_mart_dag, "run_checks", refuse)
+    monkeypatch.setattr(similarity_mart_dag, "get_current_context", lambda: {"run_id": "r"})
+    gate = similarity_mart_dag.dag.get_task("run_quality_checks").python_callable
+    with pytest.raises(AirflowFailException, match="unreferenced_molecules observed 3"):
+        gate()
