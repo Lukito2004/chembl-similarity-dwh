@@ -68,10 +68,12 @@ def test_the_message_names_the_failing_task():
     assert "compute_similarity" in message["text"]
 
 
-def test_nothing_is_sent_without_a_url(disabled):
-    with requests_mock.Mocker() as mocker:
-        assert alerting.post({"text": "hi"}, disabled) is False
-        assert mocker.call_count == 0
+def test_nothing_is_sent_without_a_url(disabled, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("no request may be attempted without a webhook URL")
+
+    monkeypatch.setattr(alerting.requests, "post", refuse)
+    assert alerting.post({"text": "hi"}, disabled) is False
 
 
 def test_a_message_is_posted_as_json(enabled):
