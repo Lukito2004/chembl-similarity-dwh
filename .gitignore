@@ -12,8 +12,10 @@ venv/
 .coverage
 htmlcov/
 
-# Airflow runtime, recreated by docker compose
-logs/
+# Airflow runtime. The logs directory itself is tracked so docker never has to
+# create it, which would leave it owned by root.
+logs/*
+!logs/.gitkeep
 plugins/
 airflow.db
 airflow-webserver.pid
@@ -24,7 +26,8 @@ standalone_admin_password.txt
 *.pem
 
 # Local data artefacts, everything durable lives in S3 or Postgres
-data/
+data/*
+!data/.gitkeep
 *.parquet
 
 # Editors

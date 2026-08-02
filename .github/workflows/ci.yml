@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt \
+            --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Test
+        run: pytest --cov
+
+  compose:
+    name: Validate the compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker compose config exits zero on an undefined variable and only warns,
+      # so the warning itself has to be the failure condition.
+      - name: Render the stack from the example environment
+        run: |
+          cp .env.example .env
+          docker compose config > /dev/null 2> compose.log || (cat compose.log && exit 1)
+          cat compose.log
+          if grep -q "variable is not set" compose.log; then
+            echo "::error::.env.example is missing a variable the compose file needs"
+            exit 1
+          fi
