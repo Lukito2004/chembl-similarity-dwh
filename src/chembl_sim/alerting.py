@@ -91,7 +91,10 @@ def build_message(
             {
                 "type": "Image",
                 "url": image_url,
-                "size": "Medium",
+                # An explicit width renders at the source resolution. size is kept as the
+                # fallback for any renderer that ignores width.
+                "width": "360px",
+                "size": "Large",
                 "horizontalAlignment": "Center",
                 "altText": "a deeply unimpressed pipeline",
             }
