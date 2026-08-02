@@ -26,6 +26,24 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
+### AWS access
+
+Fingerprints and similarity scores live on S3, so three of the four DAGs need working
+credentials. `AWS_PROFILE` and `AWS_DEFAULT_REGION` come from `.env`, `CHEMBL_S3_BUCKET`
+together with `CHEMBL_S3_ROOT_PREFIX` decides where objects are written and
+`CHEMBL_INPUT_PREFIX` points at the personal input files inside that bucket.
+
+No credential is ever copied into the project. `docker-compose.yml` mounts `${HOME}/.aws`
+into the containers, so the profile is resolved from the host:
+
+```bash
+aws sso login --profile De-School-students
+```
+
+That token expires after a few hours. Once it does, every task touching S3 fails with
+`TokenRetrievalError` and the fix is to run the command again. The mount is deliberately
+writable rather than read-only, because botocore refreshes its token cache in place.
+
 After that:
 
 ```bash
@@ -42,12 +60,39 @@ docker compose ps
 The warehouse port is published so a SQL client can reach the data mart directly. Airflow's
 metadata database is deliberately not published.
 
+### The first run
+
+DAGs arrive paused. Unpause all four, then start `chembl_ingest` by hand. It is the only one
+that needs starting, since everything after it is chained on datasets:
+
+```bash
+docker compose exec airflow-scheduler airflow dags unpause chembl_ingest
+docker compose exec airflow-scheduler airflow dags trigger chembl_ingest
+```
+
+| Order | DAG | Starts on | Roughly |
+| --- | --- | --- | --- |
+| 1 | `chembl_ingest` | triggered by hand | 50 min on the dump route |
+| 2 | `fingerprint_build` | the `silver.molecule` dataset | 5 min |
+| 3 | `input_compounds` | its own daily schedule | under a minute |
+| 4 | `similarity_mart` | both datasets above | 15 min |
+
+`input_compounds` does not depend on the ChEMBL load, so trigger it once by hand rather than
+waiting for its first daily run. `similarity_mart` then starts on its own as soon as the
+fingerprints and the source set both exist. Nothing else needs triggering.
+
+The mart is queryable on the published warehouse port as soon as that finishes:
+
+```sql
+SELECT * FROM gold.v_avg_similarity_per_source ORDER BY avg_tanimoto_score DESC LIMIT 5;
+```
+
 `docker compose down` stops everything. Add `-v` to drop both database volumes as well.
 
 ## Pipeline
 
-Three DAGs. They are chained by an Airflow dataset instead of by schedule, so downstream
-work only starts once its input has actually been rebuilt.
+Four DAGs. They are chained by Airflow datasets instead of by schedule, so downstream work
+only starts once its input has actually been rebuilt.
 
 | DAG | Trigger | Does |
 | --- | --- | --- |
@@ -71,6 +116,28 @@ loaded. Fingerprint shards use deterministic object keys, so a retry replaces a 
 instead of adding one. The source set and the mart are both rebuilt from scratch on every
 run.
 
+## Repository layout
+
+```
+dags/                   the four DAG definitions plus the shared dataset declarations
+src/chembl_sim/
+    settings.py         typed readers for every environment variable
+    logging_setup.py
+    alerting.py         the Teams webhook, carrying no Airflow imports
+    chembl/             REST client, record shapes, bronze loader, release dump
+    chem/               fingerprints, Tanimoto, the similarity search
+    inputs/             input CSV parsing and validation
+    quality/            the data quality checks and the gate that runs them
+    storage/            warehouse connections and S3 parquet transfer
+    transform/          bronze to silver, the source set, the mart, the generated view
+sql/                    schema DDL and the four static views, applied in filename order
+tests/                  209 tests, none touching the network or a database
+docker/Dockerfile       the Airflow image with RDKit and the project requirements
+```
+
+Airflow imports `dags/` alone. Everything under `src/chembl_sim` is an ordinary library on
+`PYTHONPATH`, which is what lets the whole test suite run without Airflow present.
+
 ## Warehouse architecture
 
 Three medallion layers hold data. A fourth schema keeps pipeline state separate, so
@@ -81,7 +148,7 @@ bookkeeping rows can never be confused with ChEMBL rows.
 | `bronze` | ChEMBL exactly as delivered, plus the raw input files | the source |
 | `silver` | typed, deduplicated, conformed molecules and the source set | `bronze` |
 | `gold` | the star schema data mart and its views | `silver` |
-| `meta` | ingest watermarks | not data |
+| `meta` | ingest watermarks plus the quality check history | not data |
 
 **Bronze stores the source as it arrives and nothing more.** ChEMBL's API hands back
 decimal properties as JSON *strings* (`"alogp": "1.31"`, `"max_phase": "4.0"`) while
@@ -100,20 +167,8 @@ scored, so `silver.molecule` covers only the 2,897,819 molecules that have one.
 **Gold is the data mart.** It holds `dim_molecule` and `fact_molecule_similarity` in a star
 schema, limited to molecules the fact table refers to, together with the delivery views.
 
-Volumes as loaded:
-
-| Table | Rows |
-| --- | --- |
-| `bronze.chembl_id_lookup` | 5,478,952 |
-| `bronze.molecule_dictionary` | 2,921,148 |
-| `bronze.compound_properties` | 2,901,464 |
-| `bronze.compound_structures` | 2,897,819 |
-| `silver.molecule` | 2,897,819 |
-| `silver.source_molecule` | 100 |
-| `gold.dim_molecule` | 1,099 |
-| `gold.fact_molecule_similarity` | 1,000 |
-
-The warehouse takes up roughly 5.8 GB on disk.
+Row counts for every table are listed under [Results](#results). Once loaded the warehouse
+takes up roughly 6.4 GB on disk.
 
 DDL is applied with `CREATE TABLE IF NOT EXISTS`. Missing objects get created, existing
 ones are never altered. Changing a column therefore means recreating the warehouse volume
@@ -219,8 +274,9 @@ vector is zeros and zstd compresses it around fourfold.
 ## The source molecule set
 
 The task calls for the ten nearest neighbours of each of 100 chosen molecules. The personal
-input files under `input/luka-javakhishvili/` hold 58 rows spread over five files and they
-name compounds by **name**, with no ChEMBL identifier and no structure.
+input files sit at whatever S3 prefix `CHEMBL_INPUT_PREFIX` names, here
+`input/luka-javakhishvili/`. They hold 58 rows spread over five files and they name
+compounds by **name**, with no ChEMBL identifier and no structure.
 
 Those five files do not agree on their columns either. `batch_004.csv` omits `logp` and
 `batch_005.csv` writes `IC50_nM` and `collection_date` where the rest use `ic50_nm` and
@@ -274,8 +330,14 @@ for the entire library at once. Measured over the full set:
 | Library popcounts | 1.7 s, once per run |
 | Scoring, one source against all | **1.70 s** |
 | 100 source molecules | **2.8 min** |
-| Full task, including the S3 upload | **24.5 min** |
+| Full task, including the S3 upload | **14.7 min to 24.5 min** |
 | Peak resident memory | 2.1 GB |
+
+The full task is quoted as a range because writing the 100 score objects to S3 dominates it.
+Loading the library plus scoring the 100 sources accounts for only about six minutes, so the
+remainder is 711 MB leaving the machine at whatever throughput the link gives that day. The
+two figures are the fastest and slowest runs measured. Nothing else in the table varies
+meaningfully between runs.
 
 Loading the library costs two orders of magnitude more than scoring a single source
 against it. The entire search therefore runs inside one task rather than being spread over
@@ -418,11 +480,119 @@ heavy atoms or alogp recorded. Its rows therefore show a genuinely empty cell ra
 Using `coalesce` instead would have relabelled those as `TOTAL` and folded a molecule with
 unknown properties into the grand total.
 
+## Results
+
+Every figure below comes from one complete run on ChEMBL 37, ingest through to the mart.
+
+| Layer | Output |
+| --- | --- |
+| `bronze.chembl_id_lookup` | 5,478,952 rows |
+| `bronze.molecule_dictionary` | 2,921,148 rows |
+| `bronze.compound_properties` | 2,901,464 rows |
+| `bronze.compound_structures` | 2,897,819 rows |
+| `silver.molecule` | 2,897,819 rows |
+| `silver.source_molecule` | 100 rows |
+| `gold.dim_molecule` | 1,099 rows |
+| `gold.fact_molecule_similarity` | 1,000 rows |
+| S3 fingerprints | 12 objects, 165 MB |
+| S3 similarity scores | 100 objects, 711 MB |
+
+Each source molecule is scored against all 2,897,802 fingerprinted molecules, so every
+similarity object on S3 holds a complete table of 2,897,802 rows. Only the ten best per
+source reach the mart, which is where the 1,000 fact rows come from.
+
+### Top ten for one source molecule
+
+`CHEMBL1431` is metformin, one of the 56 compounds named in the input files.
+
+```
+ target_chembl_id | tanimoto_score |         pref_name
+------------------+----------------+---------------------------
+ CHEMBL3094198    |     1.00000000 |
+ CHEMBL1703       |     0.94444444 | METFORMIN HYDROCHLORIDE
+ CHEMBL1972482    |     0.63636364 |
+ CHEMBL2348412    |     0.56666667 |
+ CHEMBL1998326    |     0.52173913 |
+ CHEMBL4297654    |     0.50000000 | BIGUANIDE
+ CHEMBL2348413    |     0.47222222 | METFORMIN PREGABALIN SALT
+ CHEMBL4791868    |     0.46153846 |
+ CHEMBL2348410    |     0.45945946 | METFORMIN GABAPENTIN SALT
+ CHEMBL1162547    |     0.43478261 | ACETYLGUANIDINIUM
+```
+
+The ordering is chemically sensible, which is the check worth making. A structural duplicate
+scores 1.0, the hydrochloride follows it, two of metformin's co-crystal salts sit in the
+middle of the list, then `BIGUANIDE`, the scaffold metformin is built on, lands at exactly
+0.5. `ACETYLGUANIDINIUM` closes the list at 0.43 carrying only the guanidine fragment. Blank
+names are ChEMBL entries with no preferred name recorded rather than missing data.
+
+### The tie flag in practice
+
+`CHEMBL41` is fluoxetine. Its list ends on a tie, which is what
+`has_duplicates_of_last_largest_score` exists to report.
+
+```
+ target_chembl_id | tanimoto_score | flagged |        pref_name
+------------------+----------------+---------+--------------------------
+ CHEMBL1169388    |     1.00000000 | f       |
+ CHEMBL153036     |     1.00000000 | f       | R-FLUOXETINE
+ CHEMBL1201082    |     0.97297297 | f       | FLUOXETINE HYDROCHLORIDE
+ CHEMBL1256757    |     0.97297297 | f       |
+ CHEMBL1257031    |     0.97297297 | f       |
+ CHEMBL4865485    |     0.72972973 | f       |
+ CHEMBL4878226    |     0.72500000 | f       |
+ CHEMBL1191185    |     0.68292683 | t       |
+ CHEMBL1196148    |     0.68292683 | t       |
+ CHEMBL1494       |     0.68292683 | t       | NORFLUOXETINE
+```
+
+Reading the full score table back from S3 accounts for the flag exactly. Seven molecules
+beat 0.68292683, leaving three places. Eight molecules hold that score. Three fit, five are
+cut, so every surviving row at that score is flagged to record that the boundary was
+arbitrary.
+
+R-fluoxetine scoring 1.0 is the stereochemistry case described earlier: Morgan fingerprints
+at radius 2 carry connectivity but not chirality, so an enantiomer is indistinguishable from
+its partner. `NORFLUOXETINE`, the active metabolite, arriving right at the cut is a
+believable neighbour rather than an artefact.
+
+### Score distribution
+
+| Measure | Value |
+| --- | --- |
+| Lowest score kept | 0.4348 |
+| Mean over the 1,000 rows | 0.7604 |
+| Highest score | 1.0000 |
+| Rows scoring exactly 1.0 | 75 |
+| Flagged rows | 40, across 24 of the 100 sources |
+
+Boundary ties touch roughly a quarter of the source molecules, so the flag reports a routine
+outcome rather than a rare edge case.
+
+### Where the results live
+
+```
+final_task/javakhishvili_luka/
+    fingerprints/part-00000.parquet  ..  part-00011.parquet    12 objects, 165 MB
+    similarity_scores/CHEMBL41.parquet  ..  one per source     100 objects, 711 MB
+```
+
+### Observed run times
+
+Measured on the dataset triggered run that produced the numbers above.
+
+| Stage | Wall clock |
+| --- | --- |
+| `fingerprint_build` | 4.9 min, 12 mapped shards, 8 running at once |
+| `similarity_mart` | 14.9 min |
+| `compute_similarity` alone | 14.7 min |
+| `run_quality_checks` | 0.3 s |
+
 ## Data quality gate
 
 Every layer that writes data is checked before the run continues. The checks live in
-`src/chembl_sim/quality/checks.py` as one SQL query each, and the gate runs as a task inside
-the DAG that produced the data.
+`src/chembl_sim/quality/checks.py` as one SQL query each. The gate runs as a task inside the
+DAG that produced the data.
 
 Checks that restate a table constraint are deliberately absent. The score range, the primary
 keys and the fact's two foreign keys are already enforced by the database, so a check on them
@@ -449,6 +619,11 @@ A blocking failure raises, which fails the task, stops the DAG before the next l
 and sends the same Teams notification every other failure sends. A warning is recorded then
 logged, leaving the run alone.
 
+The exception raised is `AirflowFailException`, so the task fails on its first attempt rather
+than retrying. Re-running a check against unchanged data cannot produce a different answer,
+so the configured retry would only delay the alert. Any other error, a dropped connection for
+instance, still retries normally.
+
 Three of these are worth singling out. `silver_conversion_keeps_every_structure` is the
 executable form of the claim that the bronze to silver conversion has to be total.
 `silver_numeric_cast_drops_nothing` makes `safe_numeric` accountable, since turning an
@@ -467,9 +642,8 @@ Every result is kept, one row per check per run:
 Keeping the history rather than only the current state means a regression can be traced back
 to the run that introduced it.
 
-A blocking failure is raised as AirflowFailException, so the task fails on the first attempt instead of retrying. Re-running a check against unchanged data cannot produce a different answer, and the configured retry would only delay the alert. Any other error, a dropped connection for instance, still retries normally.
-
-This is an addition beyond the required scope. Nothing in the specification asks for it and the pipeline meets every requirement without it.
+This is an addition beyond the required scope. Nothing in the specification asks for it and
+the pipeline meets every requirement without it.
 
 ## Failure notifications
 
@@ -515,7 +689,7 @@ ruff format --check .
 pytest --cov
 ```
 
-190 tests, 92 percent statement coverage, with a floor of 88 configured in
+209 tests, 92 percent statement coverage, with a floor of 88 configured in
 `pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
 client is driven with `requests_mock`, warehouse code runs against a recording cursor
 fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.
