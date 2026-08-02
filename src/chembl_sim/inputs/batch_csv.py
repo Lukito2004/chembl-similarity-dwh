@@ -24,6 +24,13 @@ INPUT_COLUMNS = (
 
 BRONZE_COLUMNS = ("source_file", "source_row", *INPUT_COLUMNS)
 
+# Names are the only way a batch row reaches ChEMBL, so a file without them is unusable.
+NAME_COLUMN = "compound_name"
+
+
+class MissingNameColumnError(ValueError):
+    """A batch file carries no compound_name column, so none of its rows can be matched."""
+
 
 @dataclass
 class ParsedBatch:
@@ -34,8 +41,12 @@ class ParsedBatch:
 
 
 def normalise_header(name: str) -> str:
-    """Headers drift in case between files, so IC50_nM and ic50_nm are the same column."""
-    return name.strip().lower()
+    """Headers drift in case between files, so IC50_nM and ic50_nm are the same column.
+
+    A spreadsheet export puts a byte order mark on the first header. Python does not count
+    it as whitespace, so it has to be stripped by hand or the first column goes unrecognised.
+    """
+    return name.lstrip("\ufeff").strip().lower()
 
 
 def parse_batch_csv(text: str, source_file: str) -> ParsedBatch:
@@ -48,6 +59,10 @@ def parse_batch_csv(text: str, source_file: str) -> ParsedBatch:
         return ParsedBatch()
 
     positions = {name: index for index, name in enumerate(header)}
+    if NAME_COLUMN not in positions:
+        raise MissingNameColumnError(
+            f"{source_file} has no {NAME_COLUMN} column, found {sorted(positions)}"
+        )
     parsed = ParsedBatch(unknown_headers={h for h in header if h not in INPUT_COLUMNS})
 
     for row_number, values in enumerate(reader, start=2):

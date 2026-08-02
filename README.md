@@ -131,7 +131,7 @@ src/chembl_sim/
     storage/            warehouse connections and S3 parquet transfer
     transform/          bronze to silver, the source set, the mart, the generated view
 sql/                    schema DDL and the four static views, applied in filename order
-tests/                  212 tests, none touching the network or a database
+tests/                  214 tests, none touching the network or a database
 docker/Dockerfile       the Airflow image with RDKit and the project requirements
 ```
 
@@ -710,7 +710,7 @@ ruff format --check .
 pytest --cov
 ```
 
-212 tests, 92 percent statement coverage, with a floor of 88 configured in
+214 tests, 92 percent statement coverage, with a floor of 88 configured in
 `pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
 client is driven with `requests_mock`, warehouse code runs against a recording cursor
 fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.
