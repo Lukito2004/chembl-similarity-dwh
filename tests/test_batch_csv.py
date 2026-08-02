@@ -1,3 +1,5 @@
+import pytest
+
 from chembl_sim.inputs import batch_csv
 
 STANDARD = (
@@ -62,8 +64,19 @@ def test_blank_lines_are_skipped():
 
 
 def test_unknown_headers_are_reported_not_dropped_silently():
-    parsed = batch_csv.parse_batch_csv("compound_id,mystery\nCPD-1,x\n", "odd.csv")
+    parsed = batch_csv.parse_batch_csv("compound_name,mystery\nAspirin,x\n", "odd.csv")
     assert parsed.unknown_headers == {"mystery"}
+
+
+def test_a_byte_order_mark_does_not_hide_the_first_column():
+    parsed = batch_csv.parse_batch_csv("\ufeffcompound_name,lab_id\nAspirin,LAB-A\n", "excel.csv")
+    assert parsed.unknown_headers == set()
+    assert column(parsed.rows[0], "compound_name") == "Aspirin"
+
+
+def test_a_file_without_a_name_column_is_refused():
+    with pytest.raises(batch_csv.MissingNameColumnError, match="compound_id"):
+        batch_csv.parse_batch_csv("compound_id,lab_id\nCPD-1,LAB-A\n", "nameless.csv")
 
 
 def test_an_empty_file_yields_nothing():
