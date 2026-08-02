@@ -18,11 +18,12 @@ EXCEPTION_LIMIT = 600
 OWNER = "Luka Javakhishvili"
 FAILURE_TITLE = f"{OWNER} has upset the pipeline again"
 
-# Served from the public repository, because a card image has to be a URL Teams can
-# fetch and a base64 payload of this size would never fit inside the card.
+# Served from the public repository, because a card image has to be a URL Teams can fetch
+# and a base64 payload of this size would never fit inside the card. The reference is to
+# an integration branch rather than a feature branch, so deleting the latter cannot break it.
 ALERT_GIF_URL = (
     "https://raw.githubusercontent.com/Lukito2004/chembl-similarity-dwh"
-    "/fun/alert-competition/docs/angry-pipeline.gif"
+    "/dev/docs/angry-pipeline.gif"
 )
 
 # The mood escalates with the retry count, so a first blip and a final failure do not
