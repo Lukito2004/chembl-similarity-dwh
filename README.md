@@ -141,7 +141,8 @@ src/chembl_sim/
     storage/            warehouse connections and S3 parquet transfer
     transform/          bronze to silver, the source set, the mart, the generated view
 sql/                    schema DDL and the four static views, applied in filename order
-tests/                  232 tests, none touching the network or a database
+docs/                   the image the failure card links to
+tests/                  235 tests, none touching the network or a database
 docker/Dockerfile       the Airflow image with RDKit and the project requirements
 ```
 
@@ -701,6 +702,11 @@ content as plain text in `text`. Power Automate flows differ in which field they
 supplying both avoids guessing at someone else's flow definition. The cohort webhook
 consumes the card.
 
+The failure card carries an image plus a line that changes with the retry count, so a first
+blip then a third attempt do not look identical in a busy channel. The image is served from
+this repository over `raw.githubusercontent.com`, because a card image has to be a URL that
+Teams can fetch rather than an attachment. Success cards stay plain.
+
 One environment note. The Power Automate host resolves through a six hop CNAME chain that
 some local resolvers reject, `systemd-resolved` on this machine among them, which fails
 with `Received invalid reply` while a public resolver answers normally. The Airflow
@@ -720,7 +726,7 @@ ruff format --check .
 pytest --cov
 ```
 
-232 tests, 94 percent statement coverage, with a floor of 88 configured in
+235 tests, 94 percent statement coverage, with a floor of 88 configured in
 `pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
 client is driven with `requests_mock`, warehouse code runs against a recording cursor
 fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.

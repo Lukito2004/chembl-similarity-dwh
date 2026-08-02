@@ -15,6 +15,32 @@ log = get_logger(__name__)
 
 EXCEPTION_LIMIT = 600
 
+OWNER = "Luka Javakhishvili"
+FAILURE_TITLE = f"{OWNER} has upset the pipeline again"
+
+# Served from the public repository, because a card image has to be a URL Teams can fetch
+# and a base64 payload of this size would never fit inside the card. The reference is to
+# an integration branch rather than a feature branch, so deleting the latter cannot break it.
+ALERT_GIF_URL = (
+    "https://raw.githubusercontent.com/Lukito2004/chembl-similarity-dwh"
+    "/dev/docs/angry-pipeline.gif"
+)
+
+# The mood escalates with the retry count, so a first blip and a final failure do not
+# look identical in the channel.
+MOODS = (
+    "Attempt one. Still optimistic.",
+    "Attempt two. Optimism is fading.",
+    "Attempt three. Nobody is optimistic any more.",
+)
+
+
+def mood_for(try_number: int | None) -> str:
+    """Pick a line for how many times this task has already been asked to behave."""
+    if not try_number:
+        return MOODS[0]
+    return MOODS[min(int(try_number), len(MOODS)) - 1]
+
 
 def describe(context: dict) -> dict:
     """Pull the useful fields out of an Airflow callback context."""
@@ -29,11 +55,17 @@ def describe(context: dict) -> dict:
     }
 
 
-def build_message(title: str, colour: str, details: dict) -> dict:
+def build_message(
+    title: str,
+    colour: str,
+    details: dict,
+    image_url: str | None = None,
+) -> dict:
     """An adaptive card, plus a plain text field.
 
     Power Automate flows differ in which part of the body they read, so both shapes are
-    supplied rather than guessing at one.
+    supplied rather than guessing at one. An image is attached only when one is given,
+    which keeps the success card plain.
     """
     lines = [f"DAG: {details['dag_id']}", f"Task: {details['task_id']}"]
     if details.get("run_id"):
@@ -46,6 +78,42 @@ def build_message(title: str, colour: str, details: dict) -> dict:
         lines.append(f"Logs: {details['log_url']}")
     body = "\n\n".join(lines)
 
+    blocks = [
+        {
+            "type": "TextBlock",
+            "text": title,
+            "weight": "Bolder",
+            "size": "Medium",
+            "color": colour,
+        }
+    ]
+    if image_url:
+        blocks.append(
+            {
+                "type": "Image",
+                "url": image_url,
+                # An explicit width renders at the source resolution. size is kept as the
+                # fallback for any renderer that ignores width.
+                "width": "360px",
+                "size": "Large",
+                "horizontalAlignment": "Center",
+                "altText": "a deeply unimpressed pipeline",
+            }
+        )
+        blocks.append(
+            {
+                "type": "TextBlock",
+                "text": mood_for(details.get("try_number")),
+                "isSubtle": True,
+                "horizontalAlignment": "Center",
+                "wrap": True,
+            }
+        )
+    blocks.append({"type": "TextBlock", "text": body, "wrap": True})
+    blocks.append(
+        {"type": "TextBlock", "text": f"Reported by {OWNER}", "size": "Small", "isSubtle": True}
+    )
+
     return {
         # Plain text carries the title, for a flow that reads this field instead of the card.
         "text": f"**{title}**\n\n{body}",
@@ -57,16 +125,7 @@ def build_message(title: str, colour: str, details: dict) -> dict:
                     "type": "AdaptiveCard",
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "version": "1.4",
-                    "body": [
-                        {
-                            "type": "TextBlock",
-                            "text": title,
-                            "weight": "Bolder",
-                            "size": "Medium",
-                            "color": colour,
-                        },
-                        {"type": "TextBlock", "text": body, "wrap": True},
-                    ],
+                    "body": blocks,
                 },
             }
         ],
@@ -97,7 +156,7 @@ def notify_failure(context: dict) -> bool:
     """Airflow on_failure_callback. Attach through default_args so every task carries it."""
     details = describe(context)
     log.error("Task failed: %(dag_id)s.%(task_id)s", details)
-    return post(build_message("Pipeline task failed", "Attention", details))
+    return post(build_message(FAILURE_TITLE, "Attention", details, image_url=ALERT_GIF_URL))
 
 
 def notify_success(context: dict) -> bool:

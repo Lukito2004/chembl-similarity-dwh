@@ -112,3 +112,39 @@ def test_the_title_is_not_repeated_inside_the_card():
     assert card_body[0]["text"] == "Pipeline task failed"
     assert "Pipeline task failed" not in card_body[1]["text"]
     assert message["text"].startswith("**Pipeline task failed**")
+
+
+def test_the_mood_escalates_with_the_retry_count():
+    assert alerting.mood_for(None) == alerting.MOODS[0]
+    assert alerting.mood_for(0) == alerting.MOODS[0]
+    assert alerting.mood_for(1) == alerting.MOODS[0]
+    assert alerting.mood_for(2) == alerting.MOODS[1]
+    assert alerting.mood_for(3) == alerting.MOODS[2]
+    assert alerting.mood_for(99) == alerting.MOODS[-1]
+
+
+def test_a_failure_card_carries_the_gif_and_the_owner(enabled):
+    with requests_mock.Mocker() as mocker:
+        mocker.post(URL, status_code=202)
+        alerting.post(
+            alerting.build_message(
+                alerting.FAILURE_TITLE,
+                "Attention",
+                alerting.describe(context()),
+                image_url=alerting.ALERT_GIF_URL,
+            ),
+            enabled,
+        )
+    card = mocker.request_history[0].json()["attachments"][0]["content"]["body"]
+    kinds = [block["type"] for block in card]
+    assert kinds == ["TextBlock", "Image", "TextBlock", "TextBlock", "TextBlock"]
+    assert card[1]["url"] == alerting.ALERT_GIF_URL
+    assert card[0]["text"] == alerting.FAILURE_TITLE
+    assert alerting.OWNER in card[0]["text"]
+    assert card[-1]["text"] == f"Reported by {alerting.OWNER}"
+
+
+def test_a_success_card_carries_no_image():
+    card = alerting.build_message("Pipeline completed", "Good", alerting.describe(context()))
+    kinds = [block["type"] for block in card["attachments"][0]["content"]["body"]]
+    assert "Image" not in kinds
