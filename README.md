@@ -62,24 +62,34 @@ metadata database is deliberately not published.
 
 ### The first run
 
-DAGs arrive paused. Unpause all four, then start `chembl_ingest` by hand. It is the only one
-that needs starting, since everything after it is chained on datasets:
+DAGs arrive paused. Unpausing `chembl_ingest` is enough to start it, because its schedule
+creates the first run by itself. No manual trigger is needed, and adding one only queues a
+second run behind the first:
 
 ```bash
 docker compose exec airflow-scheduler airflow dags unpause chembl_ingest
-docker compose exec airflow-scheduler airflow dags trigger chembl_ingest
 ```
 
-| Order | DAG | Starts on | Roughly |
+| Order | DAG | Starts on | Measured |
 | --- | --- | --- | --- |
-| 1 | `chembl_ingest` | triggered by hand | 50 min on the dump route |
-| 2 | `fingerprint_build` | the `silver.molecule` dataset | 5 min |
-| 3 | `input_compounds` | its own daily schedule | under a minute |
-| 4 | `similarity_mart` | both datasets above | 15 min |
+| 1 | `chembl_ingest` | unpausing it | 52 min, including the dump download |
+| 2 | `fingerprint_build` | the `silver.molecule` dataset | 6 min |
+| 3 | `input_compounds` | unpausing it, once the ingest has finished | under a minute |
+| 4 | `similarity_mart` | both datasets above | 15 to 20 min |
 
-`input_compounds` does not depend on the ChEMBL load, so trigger it once by hand rather than
-waiting for its first daily run. `similarity_mart` then starts on its own as soon as the
-fingerprints and the source set both exist. Nothing else needs triggering.
+**Wait for `chembl_ingest` to finish before unpausing the other three.** `input_compounds`
+resolves compound names against `silver.molecule` and tops the set up from that same table,
+so on an empty warehouse it selects nothing and the quality gate stops the DAG. The ordering
+matters, not the trigger:
+
+```bash
+docker compose exec airflow-scheduler airflow dags unpause fingerprint_build
+docker compose exec airflow-scheduler airflow dags unpause input_compounds
+docker compose exec airflow-scheduler airflow dags unpause similarity_mart
+```
+
+`fingerprint_build` then picks up the silver dataset, and `similarity_mart` starts on its own
+once the fingerprints and the source set both exist. Nothing else needs triggering.
 
 The mart is queryable on the published warehouse port as soon as that finishes:
 
@@ -131,7 +141,7 @@ src/chembl_sim/
     storage/            warehouse connections and S3 parquet transfer
     transform/          bronze to silver, the source set, the mart, the generated view
 sql/                    schema DDL and the four static views, applied in filename order
-tests/                  214 tests, none touching the network or a database
+tests/                  232 tests, none touching the network or a database
 docker/Dockerfile       the Airflow image with RDKit and the project requirements
 ```
 
@@ -710,12 +720,12 @@ ruff format --check .
 pytest --cov
 ```
 
-214 tests, 92 percent statement coverage, with a floor of 88 configured in
+232 tests, 94 percent statement coverage, with a floor of 88 configured in
 `pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
 client is driven with `requests_mock`, warehouse code runs against a recording cursor
 fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.
 
-Coverage sits where the branching is. Every module carrying real decisions is at 93
+Coverage sits where the branching is. Every module carrying real decisions is at 94
 percent or above: watermark resets on a release change, the skip when a release is already
 loaded, the force override, tie flagging at the top-N boundary, the total numeric cast.
 What is left uncovered is mostly thin wrappers over boto3 plus the orchestration inside

@@ -15,10 +15,11 @@ from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import get_settings
 from chembl_sim.storage.db import warehouse_connection
 from chembl_sim.storage.s3 import (
-    delete_prefix,
+    delete_keys,
     fingerprint_shard_key,
     fingerprint_table,
     fingerprints_prefix,
+    list_keys,
     write_parquet,
 )
 
@@ -62,13 +63,15 @@ with DAG(
 
     @task
     def plan_shards() -> list[dict]:
-        """Split the molecules into contiguous identifier ranges and clear the old set."""
+        """Split the molecules into contiguous identifier ranges.
+
+        Nothing is deleted here. Shard keys are deterministic, so a rebuild overwrites in
+        place and the previous library stays readable until the new one is complete.
+        """
         shard_size = get_settings().fingerprint.shard_size
         with warehouse_connection() as conn, conn.cursor() as cursor:
             cursor.execute(SHARD_BOUNDARIES, (shard_size,))
             boundaries = [row[0] for row in cursor.fetchall()]
-
-        delete_prefix(fingerprints_prefix())
 
         shards = [
             {
@@ -112,9 +115,19 @@ with DAG(
 
     @task(outlets=[FINGERPRINTS])
     def summarise(results: list[dict]) -> dict:
-        """Total what was published, so a partial run is obvious in the logs."""
+        """Total what was published, so a partial run is obvious in the logs.
+
+        Stale objects are pruned only once every shard has been written, which leaves a
+        failed rebuild with the previous library intact rather than with nothing at all.
+        """
+        written = {fingerprint_shard_key(item["index"]) for item in results}
+        stale = [key for key in list_keys(fingerprints_prefix()) if key not in written]
+        if stale:
+            delete_keys(stale)
+
         totals = {
             "shards": len(results),
+            "pruned": len(stale),
             "fingerprints": sum(r["written"] for r in results),
             "rejected": sum(r["rejected"] for r in results),
             "megabytes": round(sum(r["bytes"] for r in results) / 1e6, 1),

@@ -11,7 +11,7 @@ from chembl_sim.logging_setup import get_logger
 from chembl_sim.settings import Settings, get_settings
 from chembl_sim.storage.db import insert_rows, warehouse_connection
 from chembl_sim.storage.s3 import (
-    delete_prefix,
+    delete_keys,
     fingerprints_prefix,
     list_keys,
     read_parquet,
@@ -99,7 +99,6 @@ def run_similarity_search(
         )
 
     log.info("Scoring %s sources against %s molecules", len(sources), len(library))
-    delete_prefix(similarity_prefix(settings.s3), settings.s3)
 
     staged: list[tuple] = []
     for chembl_id in sources:
@@ -127,6 +126,15 @@ def run_similarity_search(
                     rank,
                 )
             )
+
+    # Pruned only once every source has been written, so a run that cannot finish leaves
+    # the previous score tables in place instead of removing them up front.
+    written = {similarity_key(chembl_id, settings.s3) for chembl_id in sources}
+    stale = [
+        key for key in list_keys(similarity_prefix(settings.s3), settings.s3) if key not in written
+    ]
+    if stale:
+        delete_keys(stale, settings.s3)
 
     with warehouse_connection(dsn) as conn, conn.cursor() as cursor:
         cursor.execute("TRUNCATE silver.similarity_top")

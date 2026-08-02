@@ -33,7 +33,11 @@ def tiny_library(monkeypatch):
         np.array(["CHEMBL1", "CHEMBL2"], dtype="S16"),
         np.array([[0b11110000], [0b00111100]], dtype=np.uint8),
     )
-    monkeypatch.setattr(search, "list_keys", lambda prefix, settings=None: ["shard"])
+    monkeypatch.setattr(
+        search,
+        "list_keys",
+        lambda prefix, settings=None: ["shard"] if "fingerprints" in prefix else [],
+    )
     monkeypatch.setattr(
         search,
         "read_parquet",
@@ -46,7 +50,7 @@ def tiny_library(monkeypatch):
         "from_table",
         classmethod(lambda cls, table, n_bytes, block_size=250_000: library),
     )
-    monkeypatch.setattr(search, "delete_prefix", lambda prefix, settings=None: 0)
+    monkeypatch.setattr(search, "delete_keys", lambda keys, settings=None: len(keys))
     monkeypatch.setattr(search, "write_parquet", lambda table, key, settings=None: 1)
     return library
 
@@ -63,13 +67,28 @@ def test_the_previous_results_survive_a_source_that_cannot_be_scored(
 ):
     deleted = []
     monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL404"])
-    monkeypatch.setattr(
-        search, "delete_prefix", lambda prefix, settings=None: deleted.append(prefix)
-    )
+    monkeypatch.setattr(search, "delete_keys", lambda keys, settings=None: deleted.extend(keys))
     fake_warehouse(search, [(2,)])
     with pytest.raises(search.MissingFingerprintError):
         search.run_similarity_search()
     assert deleted == []
+
+
+def test_stale_score_tables_are_pruned_only_after_a_successful_run(
+    tiny_library, fake_warehouse, monkeypatch
+):
+    deleted = []
+    monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL1"])
+    monkeypatch.setattr(search, "insert_rows", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        search,
+        "list_keys",
+        lambda prefix, settings=None: ["shard"] if "fingerprints" in prefix else ["gone.parquet"],
+    )
+    monkeypatch.setattr(search, "delete_keys", lambda keys, settings=None: deleted.extend(keys))
+    fake_warehouse(search, [(2,)])
+    search.run_similarity_search()
+    assert deleted == ["gone.parquet"]
 
 
 def test_a_short_fingerprint_library_stops_the_search(tiny_library, fake_warehouse, monkeypatch):

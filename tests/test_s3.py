@@ -67,6 +67,29 @@ def test_the_archive_stores_scores_as_float32():
     assert table.schema.field("tanimoto_score").type == pa.float32()
 
 
+def test_stale_keys_are_deleted_in_batches(monkeypatch, settings):
+    batches = []
+
+    class StubClient:
+        def delete_objects(self, **kwargs):
+            batches.append([item["Key"] for item in kwargs["Delete"]["Objects"]])
+
+    monkeypatch.setattr(s3, "s3_client", StubClient)
+    keys = [f"prefix/part-{index:05d}.parquet" for index in range(1500)]
+    assert s3.delete_keys(keys, settings) == 1500
+    assert [len(batch) for batch in batches] == [1000, 500]
+    assert batches[0][0] == "prefix/part-00000.parquet"
+
+
+def test_deleting_nothing_makes_no_request(monkeypatch, settings):
+    class StubClient:
+        def delete_objects(self, **kwargs):
+            raise AssertionError("no request may be made for an empty key list")
+
+    monkeypatch.setattr(s3, "s3_client", StubClient)
+    assert s3.delete_keys([], settings) == 0
+
+
 def test_a_table_survives_the_upload_and_download(monkeypatch, settings):
     import io
 
