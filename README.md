@@ -343,6 +343,14 @@ Loading the library costs two orders of magnitude more than scoring a single sou
 against it. The entire search therefore runs inside one task rather than being spread over
 mapped tasks, since splitting it would make every worker pay that 192 second load again.
 
+Two conditions stop the search before it writes anything. The number of shard objects on S3
+has to equal the number a complete library holds, worked out from the same split the
+fingerprint build uses, so a build that lost a shard cannot quietly be scored against. Every
+source molecule also has to be present in the library, because a source with no fingerprint
+would otherwise contribute no rows at all and shrink the delivered set without saying so.
+Both run before the previous score objects are deleted, which leaves the last good results
+in place when a run cannot complete.
+
 Ties deserve more attention than they first appear to. Tanimoto over 2048-bit fingerprints
 produces ratios with small denominators, which makes equal scores ordinary rather than
 unusual. Selection takes every molecule scoring at or above the tenth value, sorts by score
@@ -605,10 +613,12 @@ can never fail. What is checked is everything the schema cannot express.
 | `silver_smiles_is_never_blank` | silver | block |
 | `silver_numeric_cast_drops_nothing` | silver | block |
 | `every_input_row_is_accounted_for` | source | block |
+| `source_set_includes_the_input_molecules` | source | block |
 | `source_set_reaches_the_configured_size` | source | warn |
 | `fact_excludes_self_matches` | gold | block |
 | `fact_holds_the_top_n_for_every_source` | gold | block |
 | `fact_sources_come_from_the_source_set` | gold | block |
+| `every_source_molecule_has_matches` | gold | block |
 | `dim_holds_no_unreferenced_molecules` | gold | block |
 | `tie_flag_sits_only_on_the_boundary_score` | gold | block |
 | `tie_flag_agrees_across_the_boundary_score` | gold | block |
@@ -630,6 +640,17 @@ executable form of the claim that the bronze to silver conversion has to be tota
 unparseable value into null is silent by design. `release_gap_columns_are_still_empty` is
 inverted on purpose: it fires when `cx_logp` or `molecular_species` start arriving, so a
 later release that fills the documented gap announces itself instead of going unnoticed.
+
+Two more guard against absence rather than against a violation, which is a distinction worth
+stating because it is easy to miss. A check shaped as a count of offending rows returns zero
+when a table is empty, so it reports success on a run that produced nothing at all. That is
+exactly how `fact_holds_the_top_n_for_every_source` behaves when a source is skipped
+entirely: the skipped source contributes no group, so grouping by source finds nothing to
+complain about. `every_source_molecule_has_matches` counts from the source set instead of
+from the fact table, so a source that produced no rows is still counted. In the same way
+`source_set_includes_the_input_molecules` catches an input prefix that resolved to no files,
+where the top up would otherwise fill all 100 slots with molecules nobody asked for. Both
+failures are completely silent without these two.
 
 The gate also owns the outlet datasets. `SILVER_MOLECULE` and `SOURCE_MOLECULE` are published
 by the check task rather than by the task that built the layer, so a layer that failed its
@@ -726,7 +747,11 @@ matches the specification and so a backfill from an earlier release would have s
 to go.
 
 **17 molecules end up with no fingerprint.** RDKit cannot parse their SMILES. They are
-counted and reported per shard rather than being allowed to fail the run.
+counted and reported per shard rather than being allowed to fail the fingerprint build, since
+2.9 million other molecules are unaffected. They remain in `silver.molecule` though, which is
+the table the source set tops up from, so one of them can in principle be chosen as a source.
+That case is not silent: the similarity search refuses to run when a source molecule has no
+fingerprint, rather than returning a set one molecule short.
 
 **Two columns depend on which ingest route ran.** The API exposes `resource_url` on
 `chembl_id_lookup` and has no `entity_id`. The release dump is the other way round. Bronze
