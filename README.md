@@ -141,7 +141,7 @@ src/chembl_sim/
     storage/            warehouse connections and S3 parquet transfer
     transform/          bronze to silver, the source set, the mart, the generated view
 sql/                    schema DDL and the four static views, applied in filename order
-tests/                  220 tests, none touching the network or a database
+tests/                  232 tests, none touching the network or a database
 docker/Dockerfile       the Airflow image with RDKit and the project requirements
 ```
 
@@ -720,12 +720,12 @@ ruff format --check .
 pytest --cov
 ```
 
-220 tests, 93 percent statement coverage, with a floor of 88 configured in
+232 tests, 94 percent statement coverage, with a floor of 88 configured in
 `pyproject.toml`. Nothing in the suite touches the network, S3 or a database. The API
 client is driven with `requests_mock`, warehouse code runs against a recording cursor
 fixture in `conftest.py`, so the whole suite finishes in about fifteen seconds.
 
-Coverage sits where the branching is. Every module carrying real decisions is at 93
+Coverage sits where the branching is. Every module carrying real decisions is at 94
 percent or above: watermark resets on a release change, the skip when a release is already
 loaded, the force override, tie flagging at the top-N boundary, the total numeric cast.
 What is left uncovered is mostly thin wrappers over boto3 plus the orchestration inside

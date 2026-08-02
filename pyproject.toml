@@ -15,7 +15,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "N"]
 "dags/*" = ["E402"]
 
 [tool.coverage.run]
-source = ["src/chembl_sim"]
+source = ["src/chembl_sim", "dags"]
 
 [tool.coverage.report]
 show_missing = true
