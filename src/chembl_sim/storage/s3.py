@@ -77,17 +77,16 @@ def list_keys(prefix: str, settings: S3Settings | None = None) -> list[str]:
     return sorted(keys)
 
 
-def delete_prefix(prefix: str, settings: S3Settings | None = None) -> int:
-    """Clear a prefix so a rebuild cannot leave stale shards behind."""
+def delete_keys(keys: Sequence[str], settings: S3Settings | None = None) -> int:
+    """Remove named objects, so a rebuild prunes only what it has already replaced."""
     settings = settings or get_settings().s3
-    keys = list_keys(prefix, settings)
     client = s3_client()
     for start in range(0, len(keys), 1000):
         batch = keys[start : start + 1000]
         client.delete_objects(
             Bucket=settings.bucket, Delete={"Objects": [{"Key": k} for k in batch]}
         )
-    log.info("Deleted %s objects under %s", len(keys), prefix)
+    log.info("Deleted %s stale objects", len(keys))
     return len(keys)
 
 
