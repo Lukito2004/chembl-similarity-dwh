@@ -4,6 +4,7 @@ import pytest
 
 from chembl_sim.chem import search
 from chembl_sim.chem.tanimoto import FingerprintLibrary
+from chembl_sim.settings import get_settings
 
 
 def test_staged_columns_match_the_silver_table():
@@ -17,8 +18,13 @@ def test_staged_columns_match_the_silver_table():
 
 
 def test_the_result_counts_are_reported():
-    result = search.SearchResult(sources=100, missing=0, top_rows=1000, flagged_rows=40)
+    result = search.SearchResult(sources=100, top_rows=1000, flagged_rows=40)
     assert result.sources == 100 and result.top_rows == 1000
+
+
+def test_the_expected_shard_count_rounds_up(fake_warehouse):
+    fake_warehouse(search, [(250_001,)])
+    assert search.expected_shard_count(get_settings()) == 2
 
 
 @pytest.fixture
@@ -45,15 +51,32 @@ def tiny_library(monkeypatch):
     return library
 
 
-def test_sources_without_a_fingerprint_are_counted_not_dropped_silently(
+def test_a_source_without_a_fingerprint_stops_the_search(tiny_library, fake_warehouse, monkeypatch):
+    monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL1", "CHEMBL404"])
+    fake_warehouse(search, [(2,)])
+    with pytest.raises(search.MissingFingerprintError, match="CHEMBL404"):
+        search.run_similarity_search()
+
+
+def test_the_previous_results_survive_a_source_that_cannot_be_scored(
     tiny_library, fake_warehouse, monkeypatch
 ):
-    monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL1", "CHEMBL404"])
-    monkeypatch.setattr(search, "insert_rows", lambda *args, **kwargs: 0)
-    fake_warehouse(search)
-    result = search.run_similarity_search()
-    assert result.missing == 1
-    assert result.sources == 1
+    deleted = []
+    monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL404"])
+    monkeypatch.setattr(
+        search, "delete_prefix", lambda prefix, settings=None: deleted.append(prefix)
+    )
+    fake_warehouse(search, [(2,)])
+    with pytest.raises(search.MissingFingerprintError):
+        search.run_similarity_search()
+    assert deleted == []
+
+
+def test_a_short_fingerprint_library_stops_the_search(tiny_library, fake_warehouse, monkeypatch):
+    monkeypatch.setattr(search, "load_source_molecules", lambda dsn=None: ["CHEMBL1"])
+    fake_warehouse(search, [(500_000,)])
+    with pytest.raises(search.IncompleteLibraryError, match="1 shards, expected 2"):
+        search.run_similarity_search()
 
 
 def test_staged_rows_carry_a_rank(tiny_library, fake_warehouse, monkeypatch):
@@ -62,7 +85,7 @@ def test_staged_rows_carry_a_rank(tiny_library, fake_warehouse, monkeypatch):
     monkeypatch.setattr(
         search, "insert_rows", lambda cursor, schema, table, columns, rows: staged.update(rows=rows)
     )
-    fake_warehouse(search)
+    fake_warehouse(search, [(2,)])
     search.run_similarity_search()
     assert staged["rows"]
     assert staged["rows"][0][0] == "CHEMBL1"

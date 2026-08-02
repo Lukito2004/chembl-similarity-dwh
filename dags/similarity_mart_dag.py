@@ -50,7 +50,6 @@ with DAG(
         result = run_similarity_search()
         return {
             "sources": result.sources,
-            "missing": result.missing,
             "top_rows": result.top_rows,
             "flagged_rows": result.flagged_rows,
         }

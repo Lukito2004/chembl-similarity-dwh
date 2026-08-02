@@ -239,4 +239,27 @@ def build_checks(settings: Settings | None = None) -> tuple[Check, ...]:
                 WHERE cx_logp IS NOT NULL OR molecular_species IS NOT NULL
             """,
         ),
+        Check(
+            name="source_set_includes_the_input_molecules",
+            layer="source",
+            severity=BLOCK,
+            expected="at least one molecule from the input files",
+            holds=at_least(1),
+            query="SELECT count(*) FROM silver.source_molecule WHERE origin = 'input_file'",
+        ),
+        Check(
+            # A skipped source leaves no group for the top-N check to count, so absence
+            # needs its own check rather than another count of violations.
+            name="every_source_molecule_has_matches",
+            layer="gold",
+            severity=BLOCK,
+            expected="0 sources with no matches",
+            query="""
+                SELECT count(*) FROM silver.source_molecule s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM gold.fact_molecule_similarity f
+                    WHERE f.source_chembl_id = s.chembl_id
+                )
+            """,
+        ),
     )
