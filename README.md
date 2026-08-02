@@ -121,6 +121,11 @@ its inputs consistent with each other. The cost is that a change to the source s
 does not start it, so that case is picked up either at the next fingerprint rebuild or by
 triggering the DAG by hand.
 
+![DAG dependencies](docs/dag-dependencies.png)
+
+Airflow's own view of that wiring. The orange boxes are datasets rather than tasks, which is
+why `similarity_mart` has two arrows arriving at it instead of a schedule.
+
 Re-running any DAG is safe. `chembl_ingest` exits early if the release it finds is already
 loaded. Fingerprint shards use deterministic object keys, so a retry replaces a shard
 instead of adding one. The source set and the mart are both rebuilt from scratch on every
@@ -277,6 +282,12 @@ A full run produces:
 
 The zero matters most. Shards are contiguous key ranges, so any off-by-one would surface
 either as duplicated identifiers or as a gap in coverage. Neither appeared.
+
+![Fingerprint build](docs/fingerprint-build-graph.png)
+
+`build_shard [12]` is one mapped task per shard, expanded at run time from whatever
+`plan_shards` returns. The dataset on the left is what started the run, the one on the right
+is what it published.
 
 165 MB is well under the 740 MB the arithmetic suggests (2.9M multiplied by 256 B). Morgan
 fingerprints are sparse, with roughly 43 of the 2048 bits set, so most of each packed
@@ -596,6 +607,11 @@ final_task/javakhishvili_luka/
     similarity_scores/CHEMBL41.parquet  ..  one per source     100 objects, 711 MB
 ```
 
+![S3 layout](docs/s3-layout.png)
+
+Everything this project writes lives under that one prefix. Every key is built from the
+configured root, so writing outside it is not something the code can do.
+
 ### Observed run times
 
 Measured on the dataset triggered run that produced the numbers above.
@@ -635,6 +651,11 @@ can never fail. What is checked is everything the schema cannot express.
 | `tie_flag_agrees_across_the_boundary_score` | gold | block |
 | `dim_alogp_coverage_stays_high` | gold | warn |
 | `release_gap_columns_are_still_empty` | gold | warn |
+
+![Similarity mart](docs/similarity-mart-graph.png)
+
+The gate is a task like any other, sitting between the mart being loaded and the views being
+built. Nothing reaches `build_pivot_view` until the checks have cleared.
 
 A blocking failure raises, which fails the task, stops the DAG before the next layer is built
 and sends the same Teams notification every other failure sends. A warning is recorded then
@@ -706,6 +727,13 @@ The failure card carries an image plus a line that changes with the retry count,
 blip then a third attempt do not look identical in a busy channel. The image is served from
 this repository over `raw.githubusercontent.com`, because a card image has to be a URL that
 Teams can fetch rather than an attachment. Success cards stay plain.
+
+![Teams failure alert](docs/teams-failure-alert.png)
+
+This failure was induced deliberately, by running the gold quality gate with the top-N
+setting lowered to nine so a healthy mart would fail its own check. The card carries the DAG,
+the task, the run, the attempt, the exception then a link back to the task log, which is the
+information needed to start looking rather than merely a notice that something broke.
 
 One environment note. The Power Automate host resolves through a six hop CNAME chain that
 some local resolvers reject, `systemd-resolved` on this machine among them, which fails
